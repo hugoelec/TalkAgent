@@ -42,6 +42,8 @@ tts:
   queue_ahead: 5                      # Number of TTS chunks to synthesize ahead.
   group_sentences: 3                  # Number of sentence chunks per TTS packet.
   interupt_threshold: 1               # ASR hits required to interrupt TTS playback.
+  chop_exceptions:                    # Punctuation kept inside TTS chunks instead of chopping.
+    - "、"                            # CJK enumeration separator / ideographic comma.
   silence_types:                      # Text patterns removed before TTS.
     - markdown_bold                   # Remove markdown bold markers.
     - parentheses                     # Remove parenthesized text.

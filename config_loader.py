@@ -92,6 +92,10 @@ def load_simple_yaml(path: Path) -> Dict[str, Any]:
         list_items = parse_simple_nested_list_section(raw_lines, "tts", "silence_types")
         if list_items:
             tts_cfg["silence_types"] = list_items
+    if isinstance(tts_cfg, dict) and isinstance(tts_cfg.get("chop_exceptions"), dict) and not tts_cfg["chop_exceptions"]:
+        list_items = parse_simple_nested_list_section(raw_lines, "tts", "chop_exceptions")
+        if list_items:
+            tts_cfg["chop_exceptions"] = list_items
     return data
 
 
@@ -102,9 +106,10 @@ def parse_simple_list_section(lines: list[str], section_name: str) -> list[str]:
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        header = stripped.split("#", 1)[0].rstrip()
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         if section_indent is None:
-            if stripped == f"{section_name}:":
+            if header == f"{section_name}:":
                 section_indent = indent
             continue
         if indent <= section_indent:
@@ -124,9 +129,10 @@ def parse_simple_nested_list_section(lines: list[str], parent_name: str, section
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        header = stripped.split("#", 1)[0].rstrip()
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         if parent_indent is None:
-            if stripped == f"{parent_name}:":
+            if header == f"{parent_name}:":
                 parent_indent = indent
             continue
         if indent <= parent_indent:
@@ -135,7 +141,7 @@ def parse_simple_nested_list_section(lines: list[str], parent_name: str, section
             parent_indent = None
             continue
         if section_indent is None:
-            if stripped == f"{section_name}:":
+            if header == f"{section_name}:":
                 section_indent = indent
             continue
         if indent <= section_indent:
@@ -251,6 +257,27 @@ def parse_silence_types(value: Any) -> set[str]:
     return result
 
 
+def parse_chop_exceptions(value: Any) -> set[str]:
+    if not value:
+        return set()
+
+    if isinstance(value, dict):
+        items = value.keys()
+    elif isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        items = [value]
+    else:
+        return set()
+
+    result = set()
+    for item in items:
+        text = str(item).strip().rstrip(":")
+        if text:
+            result.update(text)
+    return result
+
+
 def build_args() -> argparse.Namespace:
     first = argparse.ArgumentParser(add_help=False)
     first.add_argument("--config", default=None)
@@ -363,6 +390,11 @@ def build_args() -> argparse.Namespace:
     parser.add_argument("--tts-group-sentences", type=int, default=int(tts_cfg.get("group_sentences", 1)))
     parser.add_argument("--tts-interupt-threshold", type=int, default=int(tts_cfg.get("interupt_threshold", 2)))
     parser.add_argument(
+        "--tts-chop-exceptions",
+        default=list(parse_chop_exceptions(tts_cfg.get("chop_exceptions"))),
+        help="TTS chop delimiter exceptions from config.yaml.",
+    )
+    parser.add_argument(
         "--tts-silence-types",
         default=",".join(parse_silence_types(tts_cfg.get("silence_types"))),
         help="Comma-separated TTS text filters, e.g. markdown_bold,parentheses",
@@ -377,6 +409,7 @@ def build_args() -> argparse.Namespace:
         args.llm_control_prompt = args.llm_persona_prompt
     args.asr_phonetic_output_languages = asr_phonetic_output_languages
     args.interrupt_languages = parse_language_codes(args.interrupt_languages)
+    args.tts_chop_exceptions = parse_chop_exceptions(args.tts_chop_exceptions)
     args.tts_silence_types = parse_silence_types(args.tts_silence_types)
     args.llm_extra_body = llm_cfg.get("extra_body") if isinstance(llm_cfg.get("extra_body"), dict) else None
     return args

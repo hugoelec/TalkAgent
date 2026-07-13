@@ -100,6 +100,7 @@ def main() -> None:
     print(f"  tts_group_sent     = {args.tts_group_sentences}")
     print(f"  tts_interupt_thr   = {args.tts_interupt_threshold}")
     print(f"  tts_interupt_vol   = {args.tts_interupt_volume}")
+    print(f"  tts_chop_except    = {sorted(args.tts_chop_exceptions)}")
     print(f"  tts_silence_types  = {sorted(args.tts_silence_types)}")
     print(f"  tts_packet_prefix  = {args.tts_packet_prefix!r}")
     print(f"  tts_packet_suffix  = {args.tts_packet_suffix!r}")
