@@ -1,0 +1,13 @@
+# Local backups
+old/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local app/runtime data
+.omo/
+
+# Archives and generated bundles
+*.zip

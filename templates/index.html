@@ -1,0 +1,2373 @@
+﻿<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Qasr Listener Local Mic</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 12px 16px; background: #111; color: #eee; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    h2 { font-size: 20px; margin: 14px 0 8px; }
+    p { margin: 4px 0 10px; }
+    button { font-size: 16px; padding: 8px 14px; margin-right: 8px; border-radius: 10px; border: 0; cursor: pointer; }
+    #start { background: #2c7; color: #001; }
+    #stop { background: #f66; color: #200; }
+    .topBar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .box { background: #1b1b1b; padding: 12px; border-radius: 12px; margin-top: 10px; white-space: pre-wrap; }
+    #statusBox {
+      height: 50px;
+      width: calc(100vw - 32px);
+      max-width: none;
+      padding: 8px 12px;
+      font-size: 16px;
+      line-height: 1.2;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    #statusBox .row { display: flex; flex-wrap: wrap; gap: 5px 8px; align-items: center; }
+    #statusBox .item { white-space: nowrap; }
+    #statusBox b { color: #ddd; }
+    #readerInlineStatus { color: #ffd166; }
+    .columns {
+      display: grid;
+      grid-template-columns: minmax(360px, 38fr) minmax(520px, 62fr);
+      gap: 12px;
+      width: calc(100vw - 32px);
+      max-width: none;
+      height: 68vh;
+      min-height: 0;
+    }
+    .leftColumn {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 10px;
+      height: 68vh;
+      min-height: 0;
+    }
+    .leftColumn > div {
+      min-height: 0;
+    }
+    .leftColumn > div {
+      display: flex;
+      flex-direction: column;
+    }
+    .colTitle {
+      color: #18e6ff;
+      font-size: 18px;
+      margin: 0 0 8px;
+    }
+    .panel {
+      height: 68vh;
+      overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      line-height: 1.45;
+    }
+    .leftColumn .panel { height: auto; }
+    .leftColumn > div .panel {
+      flex: 1;
+      min-height: 0;
+    }
+    #controlPromptStatus {
+      color: #ffd166;
+      font-size: 13px;
+      margin-left: 8px;
+      display: inline-block;
+      width: 92px;
+      min-width: 92px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #controlPromptControls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      white-space: nowrap;
+      color: #18e6ff;
+    }
+    #readerModeBadge {
+      margin-left: auto;
+      color: #9ca3af;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    #readerModeBadge.readerMode {
+      color: #2cff8a;
+    }
+    #readerModeBadge.readingMode {
+      color: #ffd166;
+    }
+    #controlPromptCurrent,
+    #controlPromptDelta {
+      color: #9cf;
+      font-size: 13px;
+    }
+    #controlPromptInjectThreshold {
+      width: 82px;
+      box-sizing: border-box;
+      background: #101010;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font: inherit;
+      font-size: 14px;
+    }
+    #controlPromptManualInject {
+      padding: 2px 7px;
+      margin: 0;
+      border-radius: 4px;
+      font-size: 13px;
+      background: #224b6b;
+      color: #eaf7ff;
+    }
+    #counterOut { color: #18e6ff; }
+    #replyOut { font-size: 20px; }
+    .rightColumn {
+      height: 68vh;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .rightTabs,
+    #editorFileTabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .rightTabs {
+      margin-bottom: 8px;
+    }
+    .rightTab,
+    .editorFileTab,
+    .bookFileTab,
+    #editorSave {
+      margin: 0;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: #222;
+      color: #9cf;
+      font-size: 14px;
+    }
+    .rightTab.active,
+    .editorFileTab.active,
+    .bookFileTab.active {
+      background: #14506b;
+      color: #fff;
+    }
+    .rightPane {
+      display: none;
+      min-height: 0;
+      flex: 1;
+      overflow: hidden;
+    }
+    .rightPane.active {
+      display: flex;
+      flex-direction: column;
+    }
+    .replySubTabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+      min-width: 0;
+    }
+    .replySubTabGroup,
+    .replySubActions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .replySubActions {
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .replyMemoryLabel {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      color: #18e6ff;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .replyMemoryInput {
+      width: 44px;
+      box-sizing: border-box;
+      background: #101010;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 5px;
+      padding: 3px 5px;
+      font: inherit;
+      font-size: 13px;
+    }
+    .replySubTab {
+      margin: 0;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: #222;
+      color: #9cf;
+      font-size: 14px;
+    }
+    .replySubTab.active {
+      background: #14506b;
+      color: #fff;
+    }
+    .replySubPane {
+      display: none;
+      min-height: 0;
+      flex: 1;
+      overflow: hidden;
+    }
+    .replySubPane.active {
+      display: flex;
+      flex-direction: column;
+    }
+    #talkPane #replyOut {
+      flex: 1;
+      min-height: 0;
+      height: auto;
+      overflow-y: auto;
+    }
+    #speechLlmChatBar {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      flex: 0 0 76px;
+      min-height: 76px;
+      margin-top: 8px;
+    }
+    #speechLlmChatInput {
+      flex: 1;
+      min-width: 0;
+      width: 100%;
+      resize: none;
+      background: #101010;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      line-height: 1.45;
+    }
+    #speechLlmChatSendButton {
+      align-self: stretch;
+      background: #b86618;
+      color: #fff7ea;
+      white-space: nowrap;
+      padding: 4px 9px;
+      margin: 0;
+      border-radius: 7px;
+      font-size: 14px;
+    }
+    #speechLlmChatSendButton:hover {
+      background: #d97a1d;
+    }
+    #memoryOut,
+    #historyOut,
+    #controlPromptHistoryOut,
+    #readerControlHistoryOut,
+    #routerHistoryOut {
+      flex: 1;
+      min-height: 0;
+      height: auto;
+      overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+    #editorToolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      min-width: 0;
+    }
+    #bookReaderToolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      min-width: 0;
+    }
+    #bookReaderActions {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    #editorFileTabs {
+      overflow-x: auto;
+      flex: 1;
+    }
+    #bookReaderFileTabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+      flex: 1;
+      min-width: 0;
+    }
+    #editorSave {
+      background: #224b6b;
+      color: #eaf7ff;
+      white-space: nowrap;
+    }
+#bookUploadButton,
+#speechBookUploadButton,
+#bookUnloadButton,
+#analyzerChatSendButton,
+#readerAnalyzeButton,
+#bookSave {
+      background: #b86618;
+      color: #fff7ea;
+      white-space: nowrap;
+      padding: 4px 9px;
+      margin: 0;
+      border-radius: 7px;
+      font-size: 14px;
+    }
+#bookUploadButton:hover,
+#speechBookUploadButton:hover,
+#bookUnloadButton:hover,
+#analyzerChatSendButton:hover,
+#readerAnalyzeButton:hover,
+#bookSave:hover {
+      background: #d97a1d;
+    }
+    #bookUploadInput {
+      display: none;
+    }
+    .readerTinyInput {
+      width: 44px;
+      box-sizing: border-box;
+      background: #101010;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 5px;
+      padding: 3px 5px;
+      font: inherit;
+      font-size: 13px;
+    }
+    .readerCompactLabel {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      color: #18e6ff;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    #editorStatus,
+    #bookStatus {
+      color: #ffd166;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    #monacoEditor,
+    #bookMonacoEditor {
+      flex: 1;
+      min-height: 0;
+      height: auto;
+      padding: 0;
+      overflow: hidden;
+      white-space: normal;
+    }
+    #editorFallback,
+    #bookFallback {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      height: auto;
+      width: 100%;
+      resize: none;
+      background: #101010;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      line-height: 1.45;
+    }
+    #analyzerChatBar {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      flex: 0 0 76px;
+      min-height: 76px;
+      margin-top: 8px;
+    }
+    #analyzerChatInput {
+      flex: 1;
+      min-width: 0;
+      width: 100%;
+      resize: none;
+      background: #101010;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      line-height: 1.45;
+    }
+    #analyzerChatSendButton {
+      align-self: stretch;
+    }
+    #xhtmlIndexPanel {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      margin-top: 0;
+      padding: 10px;
+    }
+    .xhtmlIndexHeader {
+      display: grid;
+      grid-template-columns: 70px minmax(180px, 1fr) minmax(220px, 1.2fr) 70px;
+      gap: 8px;
+      color: #18e6ff;
+      font-size: 13px;
+      padding: 0 4px 6px;
+      border-bottom: 1px solid #333;
+      margin-bottom: 6px;
+    }
+    .xhtmlIndexRow {
+      display: grid;
+      grid-template-columns: 70px minmax(180px, 1fr) minmax(220px, 1.2fr) 70px;
+      gap: 8px;
+      align-items: center;
+      min-height: 28px;
+      padding: 3px 4px;
+      border-bottom: 1px solid #252525;
+      font-size: 13px;
+    }
+    .xhtmlIndexRow input {
+      margin-right: 6px;
+    }
+    .xhtmlMuted {
+      color: #888;
+    }
+    .replyUser { color: #ff4f68; margin-bottom: 10px; }
+    .replyAssistant { color: #4aa3ff; margin-bottom: 18px; }
+    .replyRouter { color: #ff9f1a; margin-bottom: 18px; }
+    #log { max-height: 12vh; overflow-y: auto; }
+    #ttsLog,
+    #readerRuntimeLog {
+      height: 640px;
+      overflow-y: auto;
+      color: #ffd166;
+    }
+    #readerRuntimeLog {
+      display: none;
+      color: #9cf;
+    }
+    .logHeader {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      margin-bottom: 6px;
+    }
+    .logHeader h2 {
+      margin: 0;
+    }
+    .logTab {
+      background: #1d1d1d;
+      color: #9cf;
+      border: 0;
+      border-radius: 5px;
+      padding: 4px 12px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .logTab.active {
+      background: #125a7c;
+      color: #fff;
+    }
+    .muted { color: #aaa; font-size: 14px; }
+    .partial { color: #9cf; }
+    .err { color: #f99; }
+    /* 1. 靽格???panel 摰孵嚗宏?文摰?銝? padding嚗?冽蝺???頝?*/
+    #ttsSettingsPanel {
+      width: calc(100vw - 32px);
+      max-width: none;
+      margin-top: 12px;
+      padding: 10px 14px; /* 敺株矽??嚗?銝?憭扳?撠望銝銵?擃漲 */
+      color: #eee;
+      font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+      font-size: 14px;
+      line-height: 0;
+    }
+    #ttsSettingsPanel summary {
+      cursor: pointer;
+      color: #18e6ff;
+      font-weight: bold;
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+    /* 憒??舫???????margin ?嗅?靘?*/
+    /* 撅?????蝝啁?摰孵嚗?摨血撥?嗡漱?勗摰寞捱摰?*/
+    #ttsSettingsPanel details {
+      height: auto !important;   /* 撘瑕皜隞颱??航撖急香??摨?*/
+      display: flex;
+      flex-direction: column;
+    }
+
+    #ttsSettingsPanel label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      margin: 0;
+      color: #9fdff0;
+      white-space: nowrap;
+    }
+    #ttsSettingsPanel input[type="text"],
+    #ttsSettingsPanel input[type="number"] {
+      width: 86px;
+      box-sizing: border-box;
+      background: #0f0f0f;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 1px 4px;
+      line-height: 1.2;
+      height: 20px;
+    }
+    #ttsSettingsPanel input[type="range"] {
+      width: 120px;
+      height: 18px;
+      margin: 0;
+      vertical-align: middle;
+    }
+    #ttsSettingsPanel .rangePair {
+      display: inline-grid;
+      grid-template-columns: 120px 64px;
+      gap: 4px;
+      align-items: center;
+    }
+    #ttsSettingsPanel .rangePair input[type="number"] {
+      width: 64px;
+    }
+    #ttsSettingsPanel input.packetText {
+      width: 180px;
+    }
+    #ttsSettingsPanel label.fullRow {
+      grid-column: 1 / -1;
+    }
+    #ttsSettingsPanel input.fullText {
+      width: 100%;
+    }
+    #ttsSettingsPanel input[type="checkbox"] {
+      width: 13px;
+      height: 13px;
+      margin: 0;
+    }
+    /* ?詨?靽格迤嚗撥?嗥雯?潔?閬?隡賂?銝??嗆?銵?摨?*/
+    #ttsSettingsPanel .ttsSettingsGrid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, max-content)); /* 撖砍漲?典摰?*/
+      grid-auto-rows: max-content; /* ?嚗撥?嗆?銝銵?擃漲?頝??批捆韏啜?蝯?撱嗡撓 */
+      gap: 8px 16px;               /* 閮剖??身摰???銝???蝮桀???8px */
+      align-items: center;         /* ?撅葉撠? */
+      justify-content: start;      /* 瘞游像?椰 */
+    }
+    /* 隤踵摨?洵銝?憿舐內...??蝷箏???頝?*/
+    #ttsSettingsPanel .muted {
+      margin-top: 12px !important; /* 頝??Ｙ?蝬脫?批捆?芯???銵祝 */
+      margin-bottom: 0 !important;
+      color: #888;
+      font-size: 13px;
+    }
+    #ttsSettingsStatus { color: #ffd166; margin: 3px 0 0; }
+    #ttsSettingsPanel details:not([open]) {
+      /*height: 20px;*/
+      overflow: hidden;
+    }
+    @media (max-width: 980px) {
+      .columns { grid-template-columns: 1fr; height: auto; }
+      .leftColumn { grid-template-rows: 32vh 32vh; min-height: auto; }
+      .rightColumn { height: 60vh; }
+      .panel { height: 32vh; }
+      #ttsSettingsPanel .ttsSettingsGrid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topBar">
+    <button id="start">Start mic</button>
+    <button id="stop" disabled>Stop</button>
+    <div id="controlPromptControls">
+      <span>current: <span id="controlPromptCurrent">0</span></span>
+      <span>Delta: <span id="controlPromptDelta">0</span></span>
+      <label>Threshold:
+        <input id="controlPromptInjectThreshold" type="number" step="1" min="0" value="{{ control_prompt_inject_threshold }}">
+      </label>
+      <button id="controlPromptManualInject" type="button">Inject</button>
+      <span id="controlPromptStatus"></span>
+      <span>Rcurrent: <span id="memoryRoundCurrent">0</span></span>
+      <span>RDelta: <span id="memoryRoundDelta">0</span></span>
+      <span id="readerModeBadge">NormMode</span>
+    </div>
+  </div>
+  <div id="statusBox" class="box">
+    <div class="row">
+      <span class="item"><b>Chunk:</b> <span id="chunk">0</span></span>
+      <span class="item"><b>Volume:</b> <span id="volume">0.0000</span></span>
+      <span class="item"><b>Segment:</b> <span id="segment">idle</span></span>
+      <span class="item"><b>Reader:</b> <span id="bookStatus"></span></span>
+    </div>
+  </div>
+  <div id="ttsSettingsPanel" class="box">
+    <details>
+      <summary>OmniVoice Settings</summary>
+
+      <div id="ttsSettingsStatus"></div>
+      <div class="ttsSettingsGrid">
+        <label><span>Voice</span>
+          <input id="ttsVoice" type="text" value="{{ tts_voice }}">
+        </label>
+
+        <label><span>Language</span>
+          <input id="ttsLanguage" type="text" value="{{ tts_language }}">
+        </label>
+
+        <label><span>Speed</span>
+          <span class="rangePair">
+            <input id="ttsSpeed" type="range" min="0.1" max="3" step="0.05" value="{{ tts_speed }}">
+            <input id="ttsSpeedValue" type="number" min="0.1" max="3" step="0.05" value="{{ tts_speed }}">
+          </span>
+        </label>
+
+        <label><span>Duration seconds</span>
+          <input id="ttsDuration" type="number" min="0" step="0.1" value="{{ tts_duration }}">
+        </label>
+
+        <label><span>Inference Steps</span>
+          <span class="rangePair">
+            <input id="ttsNumStep" type="range" min="1" max="200" step="1" value="{{ tts_num_step }}">
+            <input id="ttsNumStepValue" type="number" min="1" max="200" step="1" value="{{ tts_num_step }}">
+          </span>
+        </label>
+
+        <label><span>Guidance Scale</span>
+          <span class="rangePair">
+            <input id="ttsGuidance" type="range" min="0" max="20" step="0.1" value="{{ tts_guidance_scale }}">
+            <input id="ttsGuidanceValue" type="number" min="0" max="20" step="0.1" value="{{ tts_guidance_scale }}">
+          </span>
+        </label>
+
+        <label>
+          <input id="ttsDenoise" type="checkbox" {% if tts_denoise %}checked{% endif %}>
+          <span>Denoise</span>
+        </label>
+
+        <label><span>Packet Prefix</span>
+          <input id="ttsPacketPrefix" class="packetText" type="text" value="{{ tts_packet_prefix }}">
+        </label>
+
+        <label><span>Packet Suffix</span>
+          <input id="ttsPacketSuffix" class="packetText" type="text" value="{{ tts_packet_suffix }}">
+        </label>
+
+        <label class="fullRow"><span>Instruct</span>
+          <input id="ttsInstruct" class="fullText" type="text" value="{{ tts_instruct }}">
+        </label>
+      </div>
+
+    </details>
+  </div>
+  <div class="columns">
+    <section>
+      <div class="leftColumn">
+        <div>
+          <div class="colTitle">ASR Raw</div>
+          <div id="out" class="box panel"></div>
+        </div>
+        <div>
+          <div class="colTitle">Voice Active Detection</div>
+          <div id="counterOut" class="box panel"></div>
+        </div>
+      </div>
+    </section>
+    <section class="rightColumn">
+      <div class="rightTabs">
+        <button class="rightTab active" type="button" data-right-tab="reply">LLM Reply</button>
+        <button class="rightTab" type="button" data-right-tab="config">Config</button>
+        <button class="rightTab" type="button" data-right-tab="book">BookReader</button>
+      </div>
+      <div id="replyPane" class="rightPane active">
+        <div class="replySubTabs">
+          <div class="replySubTabGroup">
+            <button class="replySubTab active" type="button" data-reply-sub-tab="talk">Talk</button>
+            <button class="replySubTab" type="button" data-reply-sub-tab="memory">memory</button>
+            <button class="replySubTab" type="button" data-reply-sub-tab="history">history</button>
+            <button class="replySubTab" type="button" data-reply-sub-tab="controlPromptHistory">ctrl pmpt hist</button>
+            <button class="replySubTab" type="button" data-reply-sub-tab="routerHistory">RouterHist</button>
+            <button class="replySubTab" type="button" data-reply-sub-tab="readerControlHistory">ReadCtrlHist</button>
+          </div>
+          <div class="replySubActions">
+            <label class="replyMemoryLabel">history#:<input id="rawHistoryRounds" class="replyMemoryInput" type="number" min="0" step="1" value="{{ raw_history_rounds }}"></label>
+            <label class="replyMemoryLabel">Recent#:<input id="rawRecentRounds" class="replyMemoryInput" type="number" min="0" step="1" value="{{ raw_recent_rounds }}"></label>
+            <label class="replyMemoryLabel">Freq:<input id="memoryExtractFreq" class="replyMemoryInput" type="number" min="0" step="1" value="{{ memory_extract_freq }}"></label>
+            <label class="replyMemoryLabel">MWidth:<input id="memoryExtractRounds" class="replyMemoryInput" type="number" min="0" step="1" value="{{ memory_extract_rounds }}"></label>
+            <button id="speechBookUploadButton" type="button">upBook</button>
+          </div>
+        </div>
+        <div id="talkPane" class="replySubPane active">
+          <div id="replyOut" class="box panel"></div>
+          <div id="speechLlmChatBar">
+            <textarea id="speechLlmChatInput" spellcheck="false" placeholder="Talk to Speech LLM..."></textarea>
+            <button id="speechLlmChatSendButton" type="button">Send</button>
+          </div>
+        </div>
+        <div id="memoryPane" class="replySubPane">
+          <div id="memoryOut" class="box panel"></div>
+        </div>
+        <div id="historyPane" class="replySubPane">
+          <div id="historyOut" class="box panel"></div>
+        </div>
+        <div id="controlPromptHistoryPane" class="replySubPane">
+          <div id="controlPromptHistoryOut" class="box panel"></div>
+        </div>
+        <div id="routerHistoryPane" class="replySubPane">
+          <div id="routerHistoryOut" class="box panel"></div>
+        </div>
+        <div id="readerControlHistoryPane" class="replySubPane">
+          <div id="readerControlHistoryOut" class="box panel"></div>
+        </div>
+      </div>
+      <div id="configPane" class="rightPane">
+        <div id="editorToolbar">
+          <div id="editorFileTabs"></div>
+          <span id="editorStatus"></span>
+          <button id="editorSave" type="button">Save</button>
+        </div>
+        <div id="monacoEditor" class="box"></div>
+        <textarea id="editorFallback" spellcheck="false"></textarea>
+      </div>
+      <div id="bookReaderPane" class="rightPane">
+        <div id="bookReaderToolbar">
+          <input id="bookUploadInput" type="file" multiple accept=".epub,.md,.txt,application/epub+zip,text/markdown,text/plain">
+          <div id="bookReaderFileTabs"></div>
+          <div id="bookReaderActions">
+            <button id="bookUploadButton" type="button">UpBook</button>
+            <button id="bookUnloadButton" type="button">Unload</button>
+            <label class="readerCompactLabel">startFrom:<input id="readerAnalyzeStart" class="readerTinyInput" type="number" min="1" step="1" value="1"></label>
+            <label class="readerCompactLabel"><input id="readerAutoAnalyzeAll" type="checkbox">all</label>
+            <label class="readerCompactLabel"><input id="readerAutoAnalyzeUpload" type="checkbox">auto</label>
+            <button id="readerAnalyzeButton" type="button">Analyze</button>
+            <button id="bookSave" type="button">Save</button>
+          </div>
+        </div>
+        <div id="xhtmlIndexPanel" class="box"></div>
+        <div id="bookMonacoEditor" class="box"></div>
+        <textarea id="bookFallback" spellcheck="false"></textarea>
+        <div id="analyzerChatBar">
+          <textarea id="analyzerChatInput" spellcheck="false" placeholder="Talk to analyzer..."></textarea>
+          <button id="analyzerChatSendButton" type="button">Send</button>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="logHeader">
+    <h2>Log</h2>
+    <button class="logTab active" type="button" data-log-tab="voice">VLog</button>
+    <button class="logTab" type="button" data-log-tab="reader">RLog</button>
+  </div>
+  <div id="ttsLog" class="box muted"></div>
+  <div id="readerRuntimeLog" class="box muted"></div>
+  <h2>Errors only</h2>
+  <div id="log" class="box muted"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+<script>
+const chunkEl = document.getElementById('chunk');
+const volumeEl = document.getElementById('volume');
+const segmentEl = document.getElementById('segment');
+const outEl = document.getElementById('out');
+const counterOutEl = document.getElementById('counterOut');
+const replyOutEl = document.getElementById('replyOut');
+const ttsLogEl = document.getElementById('ttsLog');
+const readerRuntimeLogEl = document.getElementById('readerRuntimeLog');
+const logEl = document.getElementById('log');
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
+const ttsSettingsStatusEl = document.getElementById('ttsSettingsStatus');
+const controlPromptStatusEl = document.getElementById('controlPromptStatus');
+const controlPromptInjectThresholdEl = document.getElementById('controlPromptInjectThreshold');
+const controlPromptManualInjectEl = document.getElementById('controlPromptManualInject');
+const controlPromptCurrentEl = document.getElementById('controlPromptCurrent');
+const controlPromptDeltaEl = document.getElementById('controlPromptDelta');
+const memoryRoundCurrentEl = document.getElementById('memoryRoundCurrent');
+const memoryRoundDeltaEl = document.getElementById('memoryRoundDelta');
+const readerModeBadgeEl = document.getElementById('readerModeBadge');
+const rightTabButtons = Array.from(document.querySelectorAll('.rightTab'));
+const replySubTabButtons = Array.from(document.querySelectorAll('.replySubTab'));
+const replyPaneEl = document.getElementById('replyPane');
+const talkPaneEl = document.getElementById('talkPane');
+const memoryPaneEl = document.getElementById('memoryPane');
+const historyPaneEl = document.getElementById('historyPane');
+const controlPromptHistoryPaneEl = document.getElementById('controlPromptHistoryPane');
+const routerHistoryPaneEl = document.getElementById('routerHistoryPane');
+const readerControlHistoryPaneEl = document.getElementById('readerControlHistoryPane');
+const configPaneEl = document.getElementById('configPane');
+const bookReaderPaneEl = document.getElementById('bookReaderPane');
+const speechLlmChatInputEl = document.getElementById('speechLlmChatInput');
+const speechLlmChatSendButtonEl = document.getElementById('speechLlmChatSendButton');
+const speechBookUploadButtonEl = document.getElementById('speechBookUploadButton');
+const rawRecentRoundsEl = document.getElementById('rawRecentRounds');
+const rawHistoryRoundsEl = document.getElementById('rawHistoryRounds');
+const memoryExtractFreqEl = document.getElementById('memoryExtractFreq');
+const memoryExtractRoundsEl = document.getElementById('memoryExtractRounds');
+const memoryOutEl = document.getElementById('memoryOut');
+const historyOutEl = document.getElementById('historyOut');
+const controlPromptHistoryOutEl = document.getElementById('controlPromptHistoryOut');
+const routerHistoryOutEl = document.getElementById('routerHistoryOut');
+const readerControlHistoryOutEl = document.getElementById('readerControlHistoryOut');
+const editorFileTabsEl = document.getElementById('editorFileTabs');
+const editorSaveEl = document.getElementById('editorSave');
+const editorStatusEl = document.getElementById('editorStatus');
+const monacoEditorEl = document.getElementById('monacoEditor');
+const editorFallbackEl = document.getElementById('editorFallback');
+const bookUploadButtonEl = document.getElementById('bookUploadButton');
+const bookUnloadButtonEl = document.getElementById('bookUnloadButton');
+const readerAnalyzeButtonEl = document.getElementById('readerAnalyzeButton');
+const readerAnalyzeStartEl = document.getElementById('readerAnalyzeStart');
+const readerAutoAnalyzeAllEl = document.getElementById('readerAutoAnalyzeAll');
+const readerAutoAnalyzeUploadEl = document.getElementById('readerAutoAnalyzeUpload');
+const analyzerChatInputEl = document.getElementById('analyzerChatInput');
+const analyzerChatSendButtonEl = document.getElementById('analyzerChatSendButton');
+const bookUploadInputEl = document.getElementById('bookUploadInput');
+const bookReaderFileTabsEl = document.getElementById('bookReaderFileTabs');
+const bookStatusEl = document.getElementById('bookStatus');
+const bookSaveEl = document.getElementById('bookSave');
+const bookMonacoEditorEl = document.getElementById('bookMonacoEditor');
+const bookFallbackEl = document.getElementById('bookFallback');
+const xhtmlIndexPanelEl = document.getElementById('xhtmlIndexPanel');
+const logTabButtons = Array.from(document.querySelectorAll('.logTab'));
+
+let lastTranscriptKey = '';
+let lastCounterKey = '';
+let lastReplyKey = '';
+let lastHistoryKey = '';
+let lastControlPromptHistoryKey = '';
+let lastRouterHistoryKey = '';
+let lastReaderControlHistoryKey = '';
+let lastTtsKey = '';
+let lastErrorKey = '';
+let pollInFlight = false;
+let monacoEditor = null;
+let monacoReady = false;
+let editorFiles = [];
+let editorModels = {};
+let editorContents = {};
+let editorDirty = {};
+let suppressEditorDirty = false;
+let currentEditorFileId = '';
+let bookMonacoEditor = null;
+let bookFiles = [];
+let bookModels = {};
+let bookContents = {};
+let bookDirty = {};
+let currentBookFileId = '';
+let bookWorkspaceSaved = false;
+let bookWorkspaceName = '';
+let readerContextSyncTimer = null;
+let xhtmlIndexItems = [];
+let readerRuntimeLogs = [];
+let readerAnalyzeRunning = false;
+let analyzerSendQueue = Promise.resolve();
+
+function renderLines(container, lines, className) {
+  container.innerHTML = '';
+  for (const lineText of lines) {
+    const line = document.createElement('div');
+    if (className) line.className = className;
+    line.textContent = lineText;
+    container.appendChild(line);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderReply(container, items) {
+  container.innerHTML = '';
+  for (const item of items) {
+    const line = document.createElement('div');
+    if (typeof item === 'string') {
+      line.className = 'replyAssistant';
+      line.textContent = item;
+    } else {
+      if (item.role === 'user') {
+        line.className = 'replyUser';
+      } else if (item.role === 'router') {
+        line.className = 'replyRouter';
+      } else {
+        line.className = 'replyAssistant';
+      }
+      line.textContent = item.text || '';
+    }
+    container.appendChild(line);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderHistory(container, items) {
+  if (!container) return;
+  container.textContent = JSON.stringify(items || [], null, 2);
+  container.scrollTop = container.scrollHeight;
+}
+
+function setRightTab(tabName) {
+  for (const button of rightTabButtons) {
+    button.classList.toggle('active', button.dataset.rightTab === tabName);
+  }
+  if (replyPaneEl) replyPaneEl.classList.toggle('active', tabName === 'reply');
+  if (configPaneEl) configPaneEl.classList.toggle('active', tabName === 'config');
+  if (bookReaderPaneEl) bookReaderPaneEl.classList.toggle('active', tabName === 'book');
+  if (tabName === 'config') {
+    setTimeout(() => {
+      if (monacoEditor) monacoEditor.layout();
+    }, 0);
+  } else if (tabName === 'book') {
+    setTimeout(() => {
+      if (bookMonacoEditor) bookMonacoEditor.layout();
+    }, 0);
+  }
+}
+
+function setReplySubTab(tabName) {
+  for (const button of replySubTabButtons) {
+    button.classList.toggle('active', button.dataset.replySubTab === tabName);
+  }
+  if (talkPaneEl) talkPaneEl.classList.toggle('active', tabName === 'talk');
+  if (memoryPaneEl) memoryPaneEl.classList.toggle('active', tabName === 'memory');
+  if (historyPaneEl) historyPaneEl.classList.toggle('active', tabName === 'history');
+  if (controlPromptHistoryPaneEl) controlPromptHistoryPaneEl.classList.toggle('active', tabName === 'controlPromptHistory');
+  if (routerHistoryPaneEl) routerHistoryPaneEl.classList.toggle('active', tabName === 'routerHistory');
+  if (readerControlHistoryPaneEl) readerControlHistoryPaneEl.classList.toggle('active', tabName === 'readerControlHistory');
+}
+
+function readerLogTimestamp() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  const ms = String(now.getMilliseconds()).padStart(3, '0');
+  return `${hh}:${mm}:${ss}.${ms}`;
+}
+
+function pushReaderLog(message) {
+  readerRuntimeLogs.push(`${readerLogTimestamp()} ${message}`);
+  readerRuntimeLogs = readerRuntimeLogs.slice(-200);
+  if (readerRuntimeLogEl) {
+    renderLines(readerRuntimeLogEl, readerRuntimeLogs, '');
+    readerRuntimeLogEl.scrollTop = readerRuntimeLogEl.scrollHeight;
+  }
+}
+
+function setLogTab(tabName) {
+  for (const button of logTabButtons) {
+    button.classList.toggle('active', button.dataset.logTab === tabName);
+  }
+  if (ttsLogEl) ttsLogEl.style.display = tabName === 'voice' ? 'block' : 'none';
+  if (readerRuntimeLogEl) readerRuntimeLogEl.style.display = tabName === 'reader' ? 'block' : 'none';
+}
+
+function appendAnalyzerReply(text) {
+  const current = String(bookContents.analyze_resault || '').trimEnd();
+  const reply = String(text || '').trim();
+  if (!reply) return;
+  setBookDocumentContent('analyze_resault', `${current}${current ? '\n' : ''}>${reply}\n`);
+}
+
+function appendAnalyzerPrompt(text) {
+  const current = String(bookContents.analyze_resault || '').trimEnd();
+  const prompt = String(text || '').trim();
+  if (!prompt) return;
+  setBookDocumentContent('analyze_resault', `${current}${current ? '\n' : ''}${prompt}\n`);
+}
+
+async function runAnalyzerPrompt(promptText, isManualPrompt) {
+  const prompt = String(promptText !== null ? promptText : (analyzerChatInputEl ? analyzerChatInputEl.value : '')).trim();
+  if (!prompt) {
+    setBookStatus('Analyzer prompt empty');
+    return '';
+  }
+  appendAnalyzerPrompt(prompt);
+  await openBookFile('analyze_resault');
+  if (analyzerChatInputEl && isManualPrompt) analyzerChatInputEl.value = '';
+  if (analyzerChatSendButtonEl) analyzerChatSendButtonEl.disabled = true;
+  setBookStatus('Analyzer sending...');
+  pushReaderLog(`[Analyzer] send chars=${prompt.length}: ${prompt.slice(0, 120)}`);
+  try {
+    const data = await postJsonBody('/reader-llm/send', { text: prompt });
+    if (!data.ok) throw new Error(data.error || 'reader llm failed');
+    appendAnalyzerReply(data.text || '');
+    await openBookFile('analyze_resault');
+    setBookStatus('Analyzer replied');
+    pushReaderLog(`[Analyzer] reply chars=${String(data.text || '').length}: ${String(data.text || '').slice(0, 160)}`);
+    return data.text || '';
+  } catch (e) {
+    setBookStatus(`Analyzer error: ${e.message || e}`);
+    pushReaderLog(`[Error] Analyzer: ${e.message || e}`);
+    return '';
+  } finally {
+    if (analyzerChatSendButtonEl) analyzerChatSendButtonEl.disabled = false;
+  }
+}
+
+async function sendAnalyzerPrompt(promptText = null) {
+  const isManualPrompt = promptText === null;
+  const queuedPrompt = String(isManualPrompt ? (analyzerChatInputEl ? analyzerChatInputEl.value : '') : promptText).trim();
+  if (isManualPrompt && analyzerChatInputEl) analyzerChatInputEl.value = '';
+  analyzerSendQueue = analyzerSendQueue
+    .catch(() => '')
+    .then(() => runAnalyzerPrompt(queuedPrompt, false));
+  return analyzerSendQueue;
+}
+
+async function appendAnalyzerOnLoadingPrompt(promptText) {
+  const prompt = String(promptText || '').trim();
+  if (!prompt) return;
+  appendAnalyzerPrompt(prompt);
+  await openBookFile('analyze_resault');
+  pushReaderLog(`[Analyzer] onLoading chars=${prompt.length}: ${prompt.slice(0, 120)}`);
+}
+
+async function sendSpeechLlmPrompt() {
+  const prompt = String(speechLlmChatInputEl ? speechLlmChatInputEl.value : '').trim();
+  if (!prompt) return;
+  if (speechLlmChatInputEl) speechLlmChatInputEl.value = '';
+  if (speechLlmChatSendButtonEl) speechLlmChatSendButtonEl.disabled = true;
+  try {
+    const data = await postJsonBody('/speech-llm/send', { text: prompt });
+    if (!data.ok) throw new Error(data.error || 'speech llm failed');
+  } catch (e) {
+    setBookStatus(`Speech LLM error: ${e.message || e}`);
+  } finally {
+    if (speechLlmChatSendButtonEl) speechLlmChatSendButtonEl.disabled = false;
+  }
+}
+
+async function streamReaderLlmPrompt(promptText, onDelta, options = {}) {
+  const prompt = String(promptText || '').trim();
+  if (!prompt) {
+    setBookStatus('Analyzer prompt empty');
+    return '';
+  }
+  setBookStatus('Analyzer streaming...');
+  pushReaderLog(`[Analyzer] stream send chars=${prompt.length}: ${prompt.slice(0, 120)}`);
+  const res = await fetch('/reader-llm/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: prompt }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `stream failed ${res.status}`);
+  }
+  if (!res.body) throw new Error('stream body unavailable');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let replyText = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const delta = decoder.decode(value, { stream: true });
+    if (!delta) continue;
+    replyText += delta;
+    onDelta(delta, replyText);
+  }
+  const tail = decoder.decode();
+  if (tail) {
+    replyText += tail;
+    onDelta(tail, replyText);
+  }
+  if (replyText.includes('[Analyzer error:')) {
+    throw new Error(replyText.trim());
+  }
+  pushReaderLog(`[Analyzer] stream reply chars=${replyText.length}: ${replyText.slice(0, 160)}`);
+  return replyText;
+}
+
+async function fetchAnalyzeConfig() {
+  const res = await fetch('/reader-analyze-config', { cache: 'no-store' });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'analyze config failed');
+  return data;
+}
+
+async function applyAnalyzeConfigControls(reason = '') {
+  try {
+    const config = await fetchAnalyzeConfig();
+    if (readerAutoAnalyzeAllEl) {
+      readerAutoAnalyzeAllEl.checked = !!config.AnalyzeAll;
+    }
+    if (readerAutoAnalyzeUploadEl) {
+      readerAutoAnalyzeUploadEl.checked = !!config.AutoAnalyze;
+    }
+    pushReaderLog(`[AnalyzeConfig] AnalyzeAll=${config.AnalyzeAll ? 'true' : 'false'} AutoAnalyze=${config.AutoAnalyze ? 'true' : 'false'}${reason ? ` reason=${reason}` : ''}`);
+    return config;
+  } catch (e) {
+    pushReaderLog(`[Error] AnalyzeConfig: ${e.message || e}`);
+    return null;
+  }
+}
+
+async function fetchSelectedXhtmlSection(startFrom) {
+  const ids = selectedXhtmlIds();
+  if (!ids.length) throw new Error('no XHTML selected');
+  const startIndex = Math.max(0, Number(startFrom || 1) - 1);
+  const selectedId = ids[startIndex];
+  if (!selectedId) throw new Error('no XHTML selected in range');
+  const data = await postJsonBody('/book-reader/xhtml-content', { ids: [selectedId] });
+  if (!data.ok) throw new Error(data.error || 'xhtml content failed');
+  const section = (data.sections || [])[0];
+  if (!section) throw new Error('empty XHTML section');
+  return section;
+}
+
+function xhtmlSectionPromptText(section) {
+  return [`## ${section.title || section.id}\npath: ${section.path || ''}`, String(section.text || '').trim()]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function analyzeSectionHeader(index, section) {
+  return `${index}: ${cleanXhtmlLabel(section.title || section.id)}, ${section.path || ''}, ${section.chars || 0}`;
+}
+
+function resetReaderAnalyzeStart(reason) {
+  if (!readerAnalyzeStartEl) return;
+  readerAnalyzeStartEl.value = '1';
+  if (reason) pushReaderLog(`[Analyze] startFrom reset=1 reason=${reason}`);
+}
+
+function setAnalyzeResultBookTitle(bookName) {
+  const title = String(bookName || '').trim();
+  if (!title) return;
+  const current = String(bookContents.analyze_resault || '').replace(/^\uFEFF/, '');
+  const firstLine = current.split(/\r?\n/, 1)[0].trim();
+  if (firstLine === title) return;
+  setBookDocumentContent('analyze_resault', current.trim() ? `${title}\n${current}` : `${title}\n`);
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function countTextLines(text) {
+  const source = String(text || '');
+  if (!source) return 0;
+  return source.split(/\r?\n/).length;
+}
+
+function appendSummaryIndex(startFrom, startLine, endLine) {
+  const current = String(bookContents.summary_index || '').trimEnd();
+  const row = `Chapter${startFrom}, ${startLine}, ${endLine}`;
+  setBookDocumentContent('summary_index', `${current}${current ? '\n' : ''}${row}\n`);
+}
+
+function cleanXhtmlLabel(text) {
+  return String(text || '').trim().replace(/\.(xhtml|html|htm)$/i, '');
+}
+
+function readerEventTalkerText(name, prompt) {
+  const subject = cleanXhtmlLabel(name);
+  const message = String(prompt || '').trim();
+  return [subject, message].filter(Boolean).join(' ').trim();
+}
+
+async function sendReaderEventAsrTurn(text, label, context = '') {
+  const userText = String(text || '').trim();
+  if (!userText) return false;
+  try {
+    const contextText = String(context || '');
+    const data = await postJsonBody('/reader-mode/asr-turn', { text: userText, context: contextText });
+    if (!data.ok) throw new Error(data.error || 'reader event ASR failed');
+    pushReaderLog(`[Talker] ${label || 'ReaderEvent'} ASR: ${userText.slice(0, 160)}${contextText ? ` context=${contextText.length}` : ''}`);
+    return true;
+  } catch (e) {
+    pushReaderLog(`[Error] ${label || 'ReaderEvent'} ASR: ${e.message || e}`);
+    return false;
+  }
+}
+
+async function waitForTalkerPlaybackComplete(label = 'Talker', timeoutMs = 180000) {
+  const startedAt = Date.now();
+  let sawActive = false;
+  let idleCount = 0;
+  await sleepMs(500);
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const res = await fetch('/state', { cache: 'no-store' });
+      const data = await res.json();
+      const active = !!(data.llm_inflight || data.tts_playing);
+      if (active) {
+        sawActive = true;
+        idleCount = 0;
+      } else if (sawActive) {
+        idleCount += 1;
+        if (idleCount >= 2) {
+          pushReaderLog(`[Talker] ${label} playback complete`);
+          return true;
+        }
+      } else if (Date.now() - startedAt > 5000) {
+        pushReaderLog(`[Talker] ${label} playback idle fallback`);
+        return true;
+      }
+    } catch (e) {
+      pushReaderLog(`[Error] wait ${label}: ${e.message || e}`);
+      return false;
+    }
+    await sleepMs(500);
+  }
+  pushReaderLog(`[Talker] ${label} playback wait timeout`);
+  return false;
+}
+
+async function analyzeBookSection(startFrom) {
+  collectBookContents();
+  const section = await fetchSelectedXhtmlSection(startFrom);
+  const chapterText = xhtmlSectionPromptText(section);
+  if (!chapterText.trim()) throw new Error('selected chapters have no body lines');
+  const config = await fetchAnalyzeConfig();
+  const analyzePrompt = String(config.AnalyzePrompt || '').trim();
+  if (!analyzePrompt) throw new Error('ReaderConfig Analyze.AnalyzePrompt is empty');
+  const promptParts = [analyzePrompt];
+  promptParts.push('本次 XHTML 內容：');
+  promptParts.push(chapterText);
+  const prompt = promptParts.filter(Boolean).join('\n\n');
+  const header = `# ${analyzeSectionHeader(startFrom, section)}\n`;
+  const oldResult = String(bookContents.analyze_resault || '').trimEnd();
+  const prefix = `${oldResult}${oldResult ? '\n\n' : ''}${header}\n`;
+  const startLine = countTextLines(oldResult) + (oldResult ? 2 : 1);
+  setBookDocumentContent('analyze_resault', prefix);
+  await openBookFile('analyze_resault');
+  const replyText = await streamReaderLlmPrompt(prompt, (_delta, currentText) => {
+    setBookDocumentContent('analyze_resault', `${prefix}${currentText}`);
+    if (bookMonacoEditor && currentBookFileId === 'analyze_resault') {
+      const model = bookMonacoEditor.getModel();
+      if (model) {
+        const lineCount = model.getLineCount();
+        const column = model.getLineMaxColumn(lineCount);
+        bookMonacoEditor.revealPosition({ lineNumber: lineCount, column });
+      }
+    }
+  });
+  if (!replyText) throw new Error('empty analyze reply');
+  const outputText = replyText.trim();
+  const inputChars = prompt.length;
+  const outputChars = outputText.length;
+  const ratio = outputChars > 0 ? (inputChars / outputChars).toFixed(2) : 'N/A';
+  const statsLine = `\n\n[Stats] input_chars=${inputChars} output_chars=${outputChars} input/output=${ratio}\n`;
+  const finalText = `${prefix}${outputText}${statsLine}`;
+  setBookDocumentContent('analyze_resault', finalText);
+  appendSummaryIndex(startFrom, startLine, countTextLines(finalText));
+  await syncReaderContextNow();
+  if (readerAnalyzeStartEl) readerAnalyzeStartEl.value = String(startFrom + 1);
+  setBookStatus(`Analyze appended ${startFrom}`);
+  pushReaderLog(`[Analyze] appended xhtml=${startFrom} input=${inputChars} output=${outputChars} ratio=${ratio}`);
+  return {
+    startFrom,
+    nextStart: startFrom + 1,
+    inputChars,
+    outputChars,
+    ratio,
+    title: cleanXhtmlLabel(section.title || section.path || section.id || ''),
+    summary: `${header}\n${outputText}${statsLine}`,
+  };
+}
+
+async function analyzeBookBatch() {
+  if (readerAnalyzeRunning) {
+    setBookStatus('Analyze already running');
+    return;
+  }
+  readerAnalyzeRunning = true;
+  if (readerAnalyzeButtonEl) readerAnalyzeButtonEl.disabled = true;
+  updateReaderModeBadge(true, true);
+  await syncReaderContextNow({ readingMode: true });
+  const autoAnalyzeAll = !!(readerAutoAnalyzeAllEl && readerAutoAnalyzeAllEl.checked);
+  let analyzedCount = 0;
+  let startFrom = Math.max(1, Number(readerAnalyzeStartEl ? readerAnalyzeStartEl.value : 1) || 1);
+  try {
+    const batchConfig = await fetchAnalyzeConfig();
+    const cptShortRest = Math.max(0, Number(batchConfig.CptShortRest || 0) || 0);
+    const startText = readerEventTalkerText(bookWorkspaceName, batchConfig.StartReadingPrompt);
+    if (startText) {
+      await sendReaderEventAsrTurn(startText, 'StartReading');
+    }
+    while (true) {
+      setBookStatus(autoAnalyzeAll ? `Analyze running ${startFrom}...` : 'Analyze running...');
+      const result = await analyzeBookSection(startFrom);
+      analyzedCount += 1;
+      startFrom = result.nextStart;
+      const onReadingText = readerEventTalkerText(result.title, batchConfig.onReadingPrompt);
+      if (onReadingText) {
+        setBookDocumentContent('now_chapter', result.summary || '');
+        await syncReaderContextNow();
+        await sendReaderEventAsrTurn(onReadingText, 'onReading', result.summary || '');
+        setBookDocumentContent('now_chapter', '');
+        await syncReaderContextNow();
+      }
+      if (!autoAnalyzeAll) break;
+      if (startFrom > selectedXhtmlIds().length) {
+        setBookStatus(`Analyze all completed ${analyzedCount}`);
+        pushReaderLog(`[Analyze] all completed count=${analyzedCount}`);
+        const finishText = readerEventTalkerText(bookWorkspaceName, batchConfig.FinishReadingPrompt);
+        if (finishText) {
+          await waitForTalkerPlaybackComplete('last onReading');
+          pushReaderLog('[Analyze] FinishReading delay 2000ms after last playback');
+          await sleepMs(2000);
+          await sendReaderEventAsrTurn(finishText, 'FinishReading');
+        }
+        break;
+      }
+      if (readerAutoAnalyzeAllEl && !readerAutoAnalyzeAllEl.checked) {
+        setBookStatus(`Analyze stopped at ${startFrom}`);
+        pushReaderLog(`[Analyze] all stopped next=${startFrom}`);
+        break;
+      }
+      if (cptShortRest > 0) {
+        setBookStatus(`Analyze rest ${cptShortRest}ms before ${startFrom}`);
+        pushReaderLog(`[Analyze] rest ms=${cptShortRest} next=${startFrom}`);
+        await sleepMs(cptShortRest);
+      } else {
+        await sleepMs(0);
+      }
+    }
+  } catch (e) {
+    setBookStatus(`Analyze error: ${e.message || e}`);
+    pushReaderLog(`[Error] Analyze: ${e.message || e}`);
+  } finally {
+    readerAnalyzeRunning = false;
+    await syncReaderContextNow({ readingMode: false });
+    updateReaderModeBadge(true, false);
+    if (readerAnalyzeButtonEl) readerAnalyzeButtonEl.disabled = false;
+  }
+}
+
+for (const button of rightTabButtons) {
+  button.addEventListener('click', () => setRightTab(button.dataset.rightTab));
+}
+
+for (const button of replySubTabButtons) {
+  button.addEventListener('click', () => setReplySubTab(button.dataset.replySubTab));
+}
+
+for (const button of logTabButtons) {
+  button.addEventListener('click', () => setLogTab(button.dataset.logTab));
+}
+
+window.addEventListener('resize', () => {
+  if (monacoEditor && configPaneEl && configPaneEl.classList.contains('active')) {
+    monacoEditor.layout();
+  }
+  if (bookMonacoEditor && bookReaderPaneEl && bookReaderPaneEl.classList.contains('active')) {
+    bookMonacoEditor.layout();
+  }
+});
+
+function setEditorStatus(text) {
+  if (editorStatusEl) editorStatusEl.textContent = text || '';
+}
+
+function editorCurrentValue() {
+  if (monacoEditor && currentEditorFileId) {
+    return monacoEditor.getValue();
+  }
+  return editorFallbackEl ? editorFallbackEl.value : '';
+}
+
+function setEditorValue(fileId, content, language, forceUpdate = false) {
+  editorContents[fileId] = content;
+  if (monacoReady && window.monaco && monacoEditor) {
+    if (!editorModels[fileId]) {
+      const uri = window.monaco.Uri.parse(`inmemory://qasr/${fileId}`);
+      editorModels[fileId] = window.monaco.editor.createModel(content, language || 'plaintext', uri);
+      editorModels[fileId].onDidChangeContent(() => {
+        if (!suppressEditorDirty) editorDirty[fileId] = true;
+      });
+    } else if (forceUpdate) {
+      suppressEditorDirty = true;
+      editorModels[fileId].setValue(content);
+      suppressEditorDirty = false;
+    }
+    monacoEditor.setModel(editorModels[fileId]);
+    monacoEditor.layout();
+    if (editorFallbackEl) editorFallbackEl.style.display = 'none';
+    if (monacoEditorEl) monacoEditorEl.style.display = 'block';
+  } else if (editorFallbackEl) {
+    editorFallbackEl.value = content;
+    editorFallbackEl.style.display = 'block';
+    if (monacoEditorEl) monacoEditorEl.style.display = 'none';
+  }
+}
+
+function renderEditorFileTabs() {
+  if (!editorFileTabsEl) return;
+  editorFileTabsEl.innerHTML = '';
+  for (const file of editorFiles) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `editorFileTab${file.id === currentEditorFileId ? ' active' : ''}`;
+    button.textContent = file.label;
+    button.addEventListener('click', () => openEditorFile(file.id));
+    editorFileTabsEl.appendChild(button);
+  }
+}
+
+async function openEditorFile(fileId) {
+  const file = editorFiles.find((item) => item.id === fileId);
+  if (!file) return;
+  if (!monacoEditor && currentEditorFileId && editorFallbackEl) {
+    editorContents[currentEditorFileId] = editorFallbackEl.value;
+  }
+  currentEditorFileId = fileId;
+  renderEditorFileTabs();
+  setEditorStatus('loading...');
+  try {
+    const shouldFetch = editorContents[fileId] === undefined || (!file.virtual && !editorDirty[fileId]);
+    if (shouldFetch) {
+      const res = await fetch(`/editor-file/${encodeURIComponent(fileId)}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'load failed');
+      editorContents[fileId] = data.content || '';
+      editorDirty[fileId] = false;
+    }
+    setEditorValue(fileId, editorContents[fileId], file.language, shouldFetch);
+    setEditorStatus(`loaded ${String(editorContents[fileId] || '').length}`);
+  } catch (e) {
+    setEditorStatus('load error');
+  }
+}
+
+async function saveEditorFile() {
+  if (!currentEditorFileId) return;
+  const value = editorCurrentValue();
+  setEditorStatus('saving...');
+  try {
+    const data = await postJsonBody(`/editor-file/${encodeURIComponent(currentEditorFileId)}`, {
+      content: value,
+    });
+    if (!data.ok) throw new Error(data.error || 'save failed');
+    editorContents[currentEditorFileId] = value;
+    editorDirty[currentEditorFileId] = false;
+    setEditorStatus('saved');
+  } catch (e) {
+    setEditorStatus('save error');
+  }
+}
+
+if (editorSaveEl) {
+  editorSaveEl.addEventListener('click', saveEditorFile);
+}
+
+function initMonaco() {
+  if (!window.require || !monacoEditorEl) {
+    setEditorStatus('textarea fallback');
+    return;
+  }
+  window.require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' } });
+  window.require(['vs/editor/editor.main'], () => {
+    monacoReady = true;
+    monacoEditor = window.monaco.editor.create(monacoEditorEl, {
+      automaticLayout: true,
+      fontSize: 15,
+      minimap: { enabled: false },
+      theme: 'vs-dark',
+      wordWrap: 'on',
+      unicodeHighlight: {
+        ambiguousCharacters: false,
+        invisibleCharacters: false,
+        nonBasicASCII: false,
+      },
+    });
+    if (bookMonacoEditorEl) {
+      bookMonacoEditor = window.monaco.editor.create(bookMonacoEditorEl, {
+        automaticLayout: true,
+        fontSize: 15,
+        minimap: { enabled: false },
+        theme: 'vs-dark',
+        wordWrap: 'on',
+        unicodeHighlight: {
+          ambiguousCharacters: false,
+          invisibleCharacters: false,
+          nonBasicASCII: false,
+        },
+      });
+      if (currentBookFileId && bookContents[currentBookFileId] !== undefined) {
+        const bookFile = bookFiles.find((item) => item.id === currentBookFileId);
+        setBookValue(currentBookFileId, bookContents[currentBookFileId], bookFile ? bookFile.language : 'plaintext', true);
+      }
+    }
+    if (currentEditorFileId) {
+      const file = editorFiles.find((item) => item.id === currentEditorFileId);
+      if (editorContents[currentEditorFileId] !== undefined) {
+        setEditorValue(currentEditorFileId, editorContents[currentEditorFileId], file ? file.language : 'plaintext', true);
+      }
+    }
+  }, () => {
+    setEditorStatus('textarea fallback');
+  });
+}
+
+async function initEditorFiles() {
+  if (!editorFileTabsEl) return;
+  try {
+    const res = await fetch('/editor-files', { cache: 'no-store' });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'file list failed');
+    editorFiles = data.files || [];
+    currentEditorFileId = editorFiles[0] ? editorFiles[0].id : '';
+    renderEditorFileTabs();
+    initMonaco();
+    if (currentEditorFileId) openEditorFile(currentEditorFileId);
+  } catch (e) {
+    setEditorStatus('file list error');
+    initMonaco();
+  }
+}
+
+function setBookStatus(text) {
+  if (bookStatusEl) bookStatusEl.textContent = text || '';
+}
+
+function isXhtmlIndexFile(fileId) {
+  return fileId === 'xhtml_index';
+}
+
+function isNowChapterFile(fileId) {
+  return fileId === 'now_chapter';
+}
+
+function isRuntimeBookFile(fileId) {
+  return isXhtmlIndexFile(fileId) || isNowChapterFile(fileId);
+}
+
+function withBookReaderTabs(files) {
+  const cleaned = (files || []).filter((file) => !isRuntimeBookFile(file.id));
+  if (!cleaned.length && !xhtmlIndexItems.length) return cleaned;
+  const result = [];
+  if (xhtmlIndexItems.length) {
+    result.push({
+      id: 'xhtml_index',
+      label: 'Xhtml-Index',
+      language: 'plaintext',
+      runtime: true,
+    });
+    result.push({
+      id: 'now_chapter',
+      label: 'NowChapter',
+      language: 'markdown',
+      runtime: true,
+    });
+  }
+  for (const file of cleaned) {
+    result.push(file);
+  }
+  return result;
+}
+
+function bookCurrentValue() {
+  if (isXhtmlIndexFile(currentBookFileId)) {
+    return '';
+  }
+  if (isNowChapterFile(currentBookFileId)) {
+    if (bookMonacoEditor && currentBookFileId && bookMonacoEditor.getModel()) {
+      return bookMonacoEditor.getValue();
+    }
+    return bookContents.now_chapter || '';
+  }
+  if (bookMonacoEditor && currentBookFileId) {
+    return bookMonacoEditor.getValue();
+  }
+  return bookFallbackEl ? bookFallbackEl.value : '';
+}
+
+function disposeBookModels() {
+  if (bookMonacoEditor) bookMonacoEditor.setModel(null);
+  for (const model of Object.values(bookModels)) {
+    if (model && typeof model.dispose === 'function') {
+      model.dispose();
+    }
+  }
+  bookModels = {};
+}
+
+function collectBookContents() {
+  if (currentBookFileId) {
+    bookContents[currentBookFileId] = bookCurrentValue();
+  }
+  if (monacoReady && window.monaco) {
+    for (const [fileId, model] of Object.entries(bookModels)) {
+      bookContents[fileId] = model.getValue();
+    }
+  }
+  return bookContents;
+}
+
+function persistedBookContents(contents) {
+  const persisted = {};
+  for (const fileId of ['analyze_resault', 'summary_index']) {
+    persisted[fileId] = contents[fileId] || '';
+  }
+  return persisted;
+}
+
+async function savePersistedBookContents(contents) {
+  const persisted = persistedBookContents(contents);
+  const res = await fetch('/book-reader/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      book_name: bookWorkspaceName || 'book.epub',
+      files: persisted,
+    }),
+  });
+  if (!res.ok) {
+    const preview = (await res.text()).replace(/\s+/g, ' ').slice(0, 160);
+    throw new Error(`download failed ${res.status}: ${preview}`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  let fileName = `${String(bookWorkspaceName || 'book.epub').replace(/\.epub$/i, '')}-BookReader.txt`;
+  const match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (match) {
+    try {
+      fileName = decodeURIComponent(match[1]);
+    } catch (e) {
+      fileName = match[1];
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return { ok: true, file_name: fileName };
+}
+
+async function ensureBookFileContentLoaded(fileId) {
+  if (bookContents[fileId] !== undefined) return bookContents[fileId] || '';
+  if (!bookWorkspaceSaved) return '';
+  const res = await fetch(`/book-reader/file/${encodeURIComponent(fileId)}`, { cache: 'no-store' });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || `${fileId} load failed`);
+  bookContents[fileId] = data.content || '';
+  bookDirty[fileId] = false;
+  return bookContents[fileId];
+}
+
+function setBookDocumentContent(fileId, content) {
+  const text = String(content || '');
+  bookContents[fileId] = text;
+  bookDirty[fileId] = true;
+  if (bookModels[fileId]) {
+    suppressEditorDirty = true;
+    bookModels[fileId].setValue(text);
+    suppressEditorDirty = false;
+  }
+  if (currentBookFileId === fileId) {
+    const file = bookFiles.find((item) => item.id === fileId);
+    setBookValue(fileId, text, file ? file.language : 'plaintext', true);
+  }
+  if (fileId === 'analyze_resault') {
+    scheduleReaderContextSync();
+  }
+}
+
+function updateReaderModeBadge(enabled, readingMode = false) {
+  if (!readerModeBadgeEl) return;
+  const isReadingMode = !!(enabled && readingMode);
+  readerModeBadgeEl.textContent = isReadingMode ? 'ReadingMode' : enabled ? 'ReaderMode' : 'NormMode';
+  readerModeBadgeEl.classList.toggle('readerMode', !!enabled);
+  readerModeBadgeEl.classList.toggle('readingMode', isReadingMode);
+}
+
+function scheduleReaderContextSync() {
+  if (readerContextSyncTimer) clearTimeout(readerContextSyncTimer);
+  readerContextSyncTimer = setTimeout(() => {
+    readerContextSyncTimer = null;
+    syncReaderContextNow();
+  }, 600);
+}
+
+async function syncReaderContextNow(options = {}) {
+  const analyzeResault = String(bookContents.analyze_resault || '');
+  const summaryIndex = String(bookContents.summary_index || '');
+  const nowChapter = String(bookContents.now_chapter || '');
+  const payload = {
+    analyze_resault: analyzeResault,
+    summary_index: summaryIndex,
+    now_chapter: nowChapter,
+  };
+  if (Object.prototype.hasOwnProperty.call(options, 'readingMode')) {
+    payload.reading_mode = !!options.readingMode;
+  }
+  try {
+    await postJsonBody('/reader-mode/context', payload);
+  } catch (e) {
+    pushReaderLog(`[Error] reader context sync: ${e.message || e}`);
+  }
+}
+
+function selectedXhtmlIds() {
+  if (!xhtmlIndexPanelEl || !xhtmlIndexPanelEl.children.length) {
+    return xhtmlIndexItems.filter((item) => item.checked !== false).map((item) => String(item.id));
+  }
+  return Array.from(xhtmlIndexPanelEl.querySelectorAll('input[data-xhtml-id]:checked')).map((item) => item.dataset.xhtmlId);
+}
+
+function applyNormalizedXhtmlSelection() {
+  if (!Array.isArray(xhtmlIndexItems) || !xhtmlIndexItems.length) return;
+  if (xhtmlIndexItems.length <= 2) {
+    for (const item of xhtmlIndexItems) {
+      item.checked = false;
+    }
+    pushReaderLog(`[XHTML] normalized selection skipped count=${xhtmlIndexItems.length}`);
+    return;
+  }
+  xhtmlIndexItems.forEach((item, index) => {
+    item.checked = index > 0 && index < xhtmlIndexItems.length - 1;
+  });
+  pushReaderLog(`[XHTML] normalized selection selected=${selectedXhtmlIds().length}/${xhtmlIndexItems.length}`);
+}
+
+function renderXhtmlIndex() {
+  if (!xhtmlIndexPanelEl) return;
+  xhtmlIndexPanelEl.innerHTML = '';
+  const header = document.createElement('div');
+  header.className = 'xhtmlIndexHeader';
+  header.innerHTML = '<div>Use</div><div>Title</div><div>Path</div><div>Chars</div>';
+  xhtmlIndexPanelEl.appendChild(header);
+  for (const item of xhtmlIndexItems) {
+    const row = document.createElement('label');
+    row.className = 'xhtmlIndexRow';
+    const spine = item.spine_index ? String(item.spine_index).padStart(3, '0') : '---';
+    row.innerHTML = `
+      <div><input type="checkbox" data-xhtml-id="${String(item.id).replace(/"/g, '&quot;')}">${spine}</div>
+      <div></div>
+      <div class="xhtmlMuted"></div>
+      <div></div>
+    `;
+    const checkbox = row.querySelector('input');
+    checkbox.checked = item.checked !== false;
+    checkbox.addEventListener('change', () => {
+      item.checked = checkbox.checked;
+    });
+    row.children[1].textContent = cleanXhtmlLabel(item.title || item.id || '');
+    row.children[2].textContent = item.path || '';
+    row.children[3].textContent = String(item.chars || 0);
+    xhtmlIndexPanelEl.appendChild(row);
+  }
+}
+
+function setBookValue(fileId, content, language, forceUpdate = false) {
+  bookContents[fileId] = content;
+  if (xhtmlIndexPanelEl) xhtmlIndexPanelEl.style.display = 'none';
+  if (isXhtmlIndexFile(fileId)) {
+    if (bookMonacoEditor) bookMonacoEditor.setModel(null);
+    if (bookFallbackEl) bookFallbackEl.style.display = 'none';
+    if (bookMonacoEditorEl) bookMonacoEditorEl.style.display = 'none';
+    renderXhtmlIndex();
+    if (xhtmlIndexPanelEl) xhtmlIndexPanelEl.style.display = 'block';
+    return;
+  }
+  if (monacoReady && window.monaco && bookMonacoEditor) {
+    if (!bookModels[fileId]) {
+      const uri = window.monaco.Uri.parse(`inmemory://bookreader/${fileId}`);
+      bookModels[fileId] = window.monaco.editor.createModel(content, language || 'plaintext', uri);
+      bookModels[fileId].onDidChangeContent(() => {
+        if (suppressEditorDirty) return;
+        bookDirty[fileId] = true;
+        bookContents[fileId] = bookModels[fileId].getValue();
+      });
+    } else if (forceUpdate) {
+      suppressEditorDirty = true;
+      bookModels[fileId].setValue(content);
+      suppressEditorDirty = false;
+    }
+    bookMonacoEditor.setModel(bookModels[fileId]);
+    bookMonacoEditor.updateOptions({ readOnly: false });
+    bookMonacoEditor.layout();
+    if (bookFallbackEl) bookFallbackEl.style.display = 'none';
+    if (bookMonacoEditorEl) bookMonacoEditorEl.style.display = 'block';
+  } else if (bookFallbackEl) {
+    bookFallbackEl.value = content;
+    bookFallbackEl.readOnly = false;
+    bookFallbackEl.style.display = 'block';
+    if (bookMonacoEditorEl) bookMonacoEditorEl.style.display = 'none';
+  }
+}
+
+function renderBookFileTabs() {
+  if (!bookReaderFileTabsEl) return;
+  bookReaderFileTabsEl.innerHTML = '';
+  for (const file of bookFiles) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `bookFileTab${file.id === currentBookFileId ? ' active' : ''}`;
+    button.textContent = file.label;
+    button.addEventListener('click', () => openBookFile(file.id));
+    bookReaderFileTabsEl.appendChild(button);
+  }
+}
+
+async function openBookFile(fileId) {
+  const file = bookFiles.find((item) => item.id === fileId);
+  if (!file) return;
+  if (currentBookFileId && currentBookFileId !== fileId) {
+    bookContents[currentBookFileId] = bookCurrentValue();
+  }
+  currentBookFileId = fileId;
+  renderBookFileTabs();
+  setBookStatus('loading...');
+  try {
+    const shouldFetch = !isRuntimeBookFile(fileId) && bookWorkspaceSaved && (bookContents[fileId] === undefined || !bookDirty[fileId]);
+    if (shouldFetch) {
+      const res = await fetch(`/book-reader/file/${encodeURIComponent(fileId)}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'load failed');
+      bookContents[fileId] = data.content || '';
+      bookDirty[fileId] = false;
+    }
+    setBookValue(fileId, bookContents[fileId], file.language, shouldFetch);
+    setBookStatus(`loaded ${String(bookContents[fileId] || '').length}`);
+    pushReaderLog(`[Open] ${file.label} chars=${String(bookContents[fileId] || '').length}`);
+  } catch (e) {
+    setBookStatus(`load error: ${e.message || e}`);
+    pushReaderLog(`[Error] load ${file.label}: ${e.message || e}`);
+  }
+}
+
+async function initBookFiles(files = null, saved = true) {
+  if (!bookReaderFileTabsEl) return;
+  try {
+    if (files === null) {
+      const res = await fetch('/book-reader/files', { cache: 'no-store' });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'file list failed');
+      files = data.files || [];
+    }
+    bookFiles = withBookReaderTabs(files);
+    bookWorkspaceSaved = !!(saved && files && files.length);
+    renderBookFileTabs();
+    if (currentBookFileId && !bookFiles.some((file) => file.id === currentBookFileId)) {
+      currentBookFileId = '';
+    }
+    if (!currentBookFileId && bookFiles[0]) {
+      currentBookFileId = bookFiles[0].id;
+    }
+    if (currentBookFileId) await openBookFile(currentBookFileId);
+    if (!bookFiles.length) setBookStatus('upload a .epub book');
+  } catch (e) {
+    setBookStatus('file list error');
+    pushReaderLog(`[Error] file list: ${e.message || e}`);
+  }
+}
+
+async function uploadBookFile(fileList) {
+  const files = Array.from(fileList || []).filter(Boolean);
+  const epubFile = files.find((file) => /\.epub$/i.test(file.name || ''));
+  if (!epubFile) {
+    setBookStatus('upload needs one .epub');
+    pushReaderLog('[Error] upload: one .epub file is required');
+    return;
+  }
+  setBookStatus('uploading...');
+  const form = new FormData();
+  for (const file of files) {
+    form.append('files', file, file.name);
+  }
+  try {
+    const res = await fetch('/book-reader/upload', {
+      method: 'POST',
+      body: form,
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'upload failed');
+    disposeBookModels();
+    bookContents = {};
+    bookDirty = {};
+    bookContents.now_chapter = '';
+    bookDirty.now_chapter = false;
+    xhtmlIndexItems = data.xhtml_index || [];
+    applyNormalizedXhtmlSelection();
+    renderXhtmlIndex();
+    bookWorkspaceSaved = !!data.saved;
+    bookWorkspaceName = data.book_name || epubFile.name || 'book.epub';
+    resetReaderAnalyzeStart('upload');
+    for (const item of data.files || []) {
+      bookContents[item.id] = item.content || '';
+      bookDirty[item.id] = !data.saved || !item.exists;
+    }
+    if (!data.loaded_analyze_resault) {
+      setAnalyzeResultBookTitle(bookWorkspaceName);
+    }
+    currentBookFileId = data.files && data.files.some((item) => item.id === 'analyze_resault') ? 'analyze_resault' : '';
+    await initBookFiles(data.files || [], bookWorkspaceSaved);
+    const analyzeConfig = await applyAnalyzeConfigControls('upload');
+    const loadedParts = [];
+    if (data.loaded_analyze_resault) loadedParts.push('AnalyzeResault');
+    if (data.loaded_summary_index) loadedParts.push('SummaryIndex');
+    const loadedSuffix = loadedParts.length ? ` loaded=${loadedParts.join(',')}` : '';
+    setBookStatus(data.uploaded_sidecars && Object.keys(data.uploaded_sidecars).length ? 'bundle loaded' : 'draft loaded');
+    updateReaderModeBadge(true);
+    await syncReaderContextNow();
+    const uploadedSidecars = data.uploaded_sidecars ? Object.values(data.uploaded_sidecars).join(',') : '';
+    pushReaderLog(`[Upload] epub=${bookWorkspaceName} xhtml=${xhtmlIndexItems.length}${uploadedSidecars ? ` sidecars=${uploadedSidecars}` : ''}${loadedSuffix}`);
+    if (data.on_loading_talker_text) {
+      pushReaderLog(`[Talker] onLoading ASR: ${String(data.on_loading_talker_text).slice(0, 160)}`);
+    }
+    if (data.on_loading_prompt && !data.loaded_analyze_resault) {
+      await appendAnalyzerOnLoadingPrompt(data.on_loading_prompt);
+      await syncReaderContextNow();
+    }
+    if (analyzeConfig && analyzeConfig.AutoAnalyze) {
+      pushReaderLog('[Analyze] auto start delay 3000ms from upload AutoAnalyze=true');
+      await sleepMs(3000);
+      await analyzeBookBatch();
+    }
+  } catch (e) {
+    setBookStatus(`upload error: ${e.message || e}`);
+    pushReaderLog(`[Error] upload: ${e.message || e}`);
+  }
+}
+
+async function saveBookFile() {
+  if (!currentBookFileId) return;
+  const value = bookCurrentValue();
+  setBookStatus('saving...');
+  try {
+    if (currentBookFileId && !isRuntimeBookFile(currentBookFileId)) {
+      bookContents[currentBookFileId] = value;
+    }
+    collectBookContents();
+    const allBookContents = collectBookContents();
+    const data = await savePersistedBookContents(allBookContents);
+    if (!data.ok) throw new Error(data.error || 'save failed');
+    if (!bookWorkspaceSaved && data.files) {
+      bookWorkspaceSaved = true;
+      await initBookFiles(data.files, true);
+    }
+    for (const fileId of ['analyze_resault', 'summary_index']) {
+      bookDirty[fileId] = false;
+    }
+    setBookStatus('downloaded');
+    pushReaderLog(`[Save] downloaded ${data.file_name || 'BookReader.txt'}`);
+  } catch (e) {
+    setBookStatus(`save error: ${e.message || e}`);
+    pushReaderLog(`[Error] save: ${e.message || e}`);
+  }
+}
+
+async function unloadBookWorkspace() {
+  setBookStatus('unloading...');
+  try {
+    await postJson('/book-reader/unload');
+  } catch (e) {
+    // UI cleanup still works even if the server was already empty.
+  }
+  bookFiles = [];
+  disposeBookModels();
+  bookContents = {};
+  bookDirty = {};
+  xhtmlIndexItems = [];
+  currentBookFileId = '';
+  bookWorkspaceSaved = false;
+  bookWorkspaceName = '';
+  if (readerContextSyncTimer) {
+    clearTimeout(readerContextSyncTimer);
+    readerContextSyncTimer = null;
+  }
+  updateReaderModeBadge(false);
+  if (bookReaderFileTabsEl) bookReaderFileTabsEl.innerHTML = '';
+  if (bookMonacoEditor) bookMonacoEditor.setModel(null);
+  if (bookFallbackEl) bookFallbackEl.value = '';
+  if (analyzerChatInputEl) analyzerChatInputEl.value = '';
+  if (xhtmlIndexPanelEl) {
+    xhtmlIndexPanelEl.innerHTML = '';
+    xhtmlIndexPanelEl.style.display = 'none';
+  }
+  resetReaderAnalyzeStart('unload');
+  setBookStatus('unloaded');
+  pushReaderLog('[Unload] reader workspace cleared');
+}
+
+if (bookUploadButtonEl && bookUploadInputEl) {
+  bookUploadButtonEl.addEventListener('click', () => bookUploadInputEl.click());
+  bookUploadInputEl.addEventListener('change', () => {
+    uploadBookFile(bookUploadInputEl.files);
+    bookUploadInputEl.value = '';
+  });
+}
+if (speechBookUploadButtonEl && bookUploadInputEl) {
+  speechBookUploadButtonEl.addEventListener('click', () => bookUploadInputEl.click());
+}
+if (bookUnloadButtonEl) {
+  bookUnloadButtonEl.addEventListener('click', unloadBookWorkspace);
+}
+if (analyzerChatSendButtonEl) {
+  analyzerChatSendButtonEl.addEventListener('click', () => sendAnalyzerPrompt());
+}
+if (analyzerChatInputEl) {
+  analyzerChatInputEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      sendAnalyzerPrompt();
+    }
+  });
+}
+if (speechLlmChatSendButtonEl) {
+  speechLlmChatSendButtonEl.addEventListener('click', sendSpeechLlmPrompt);
+}
+if (speechLlmChatInputEl) {
+  speechLlmChatInputEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      sendSpeechLlmPrompt();
+    }
+  });
+}
+if (readerAnalyzeButtonEl) {
+  readerAnalyzeButtonEl.addEventListener('click', analyzeBookBatch);
+}
+if (bookSaveEl) {
+  bookSaveEl.addEventListener('click', saveBookFile);
+}
+
+function clampNumber(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.min(max, Math.max(min, number));
+}
+
+function bindRangeNumber(rangeId, numberId) {
+  const range = document.getElementById(rangeId);
+  const number = document.getElementById(numberId);
+  if (!range || !number) return;
+  const syncNumber = () => { number.value = range.value; };
+  const syncRange = () => {
+    const min = Number(range.min);
+    const max = Number(range.max);
+    const value = clampNumber(number.value, min, max);
+    number.value = String(value);
+    range.value = String(value);
+  };
+  range.addEventListener('input', syncNumber);
+  number.addEventListener('input', syncRange);
+  syncNumber();
+}
+
+bindRangeNumber('ttsSpeed', 'ttsSpeedValue');
+bindRangeNumber('ttsNumStep', 'ttsNumStepValue');
+bindRangeNumber('ttsGuidance', 'ttsGuidanceValue');
+bindTtsSettingsLive();
+
+async function postJson(url) {
+  const res = await fetch(url, { method: 'POST' });
+  return res.json();
+}
+
+async function postJsonBody(url, payload) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (e) {
+    const preview = text.replace(/\s+/g, ' ').slice(0, 160);
+    throw new Error(`non-JSON response ${res.status}: ${preview}`);
+  }
+  if (!res.ok && data && data.error) {
+    throw new Error(data.error);
+  }
+  return data;
+}
+
+function ttsSettingsPayload() {
+  return {
+    tts_voice: document.getElementById('ttsVoice').value,
+    tts_language: document.getElementById('ttsLanguage').value,
+    tts_instruct: document.getElementById('ttsInstruct').value,
+    tts_speed: Number(document.getElementById('ttsSpeedValue').value),
+    tts_duration: Number(document.getElementById('ttsDuration').value),
+    tts_num_step: Number(document.getElementById('ttsNumStepValue').value),
+    tts_guidance_scale: Number(document.getElementById('ttsGuidanceValue').value),
+    tts_denoise: document.getElementById('ttsDenoise').checked,
+    tts_packet_prefix: document.getElementById('ttsPacketPrefix').value,
+    tts_packet_suffix: document.getElementById('ttsPacketSuffix').value,
+  };
+}
+
+let ttsSettingsTimer = null;
+async function saveTtsSettingsNow() {
+  if (ttsSettingsStatusEl) ttsSettingsStatusEl.textContent = 'saving...';
+  try {
+    const data = await postJsonBody('/tts-settings', ttsSettingsPayload());
+    if (!data.ok) throw new Error(data.error || 'save failed');
+    if (ttsSettingsStatusEl) ttsSettingsStatusEl.textContent = 'saved';
+  } catch (e) {
+    if (ttsSettingsStatusEl) ttsSettingsStatusEl.textContent = 'save error';
+  }
+}
+
+function scheduleTtsSettingsSave() {
+  if (ttsSettingsStatusEl) ttsSettingsStatusEl.textContent = 'changed';
+  clearTimeout(ttsSettingsTimer);
+  ttsSettingsTimer = setTimeout(saveTtsSettingsNow, 250);
+}
+
+function bindTtsSettingsLive() {
+  const ids = [
+    'ttsVoice',
+    'ttsLanguage',
+    'ttsInstruct',
+    'ttsSpeed',
+    'ttsSpeedValue',
+    'ttsDuration',
+    'ttsNumStep',
+    'ttsNumStepValue',
+    'ttsGuidance',
+    'ttsGuidanceValue',
+    'ttsDenoise',
+    'ttsPacketPrefix',
+    'ttsPacketSuffix',
+  ];
+  for (const id of ids) {
+    const input = document.getElementById(id);
+    if (!input) continue;
+    input.addEventListener('input', scheduleTtsSettingsSave);
+    input.addEventListener('change', scheduleTtsSettingsSave);
+  }
+}
+
+let controlPromptTimer = null;
+async function saveControlPromptNow() {
+  if (controlPromptStatusEl) controlPromptStatusEl.textContent = 'saving...';
+  try {
+    const data = await postJsonBody('/control-prompt', {
+      inject_threshold: Number(controlPromptInjectThresholdEl ? controlPromptInjectThresholdEl.value : 0),
+      raw_history_rounds: Number(rawHistoryRoundsEl ? rawHistoryRoundsEl.value : 0),
+      raw_recent_rounds: Number(rawRecentRoundsEl ? rawRecentRoundsEl.value : 0),
+      memory_extract_freq: Number(memoryExtractFreqEl ? memoryExtractFreqEl.value : 0),
+      memory_extract_rounds: Number(memoryExtractRoundsEl ? memoryExtractRoundsEl.value : 0),
+    });
+    if (!data.ok) throw new Error(data.error || 'save failed');
+    if (controlPromptInjectThresholdEl && document.activeElement !== controlPromptInjectThresholdEl) {
+      controlPromptInjectThresholdEl.value = String(data.inject_threshold ?? controlPromptInjectThresholdEl.value);
+    }
+    updateControlPromptTokenDisplay(data);
+    if (controlPromptStatusEl) controlPromptStatusEl.textContent = 'saved';
+  } catch (e) {
+    if (controlPromptStatusEl) controlPromptStatusEl.textContent = 'save error';
+  }
+}
+
+function scheduleControlPromptSave() {
+  if (controlPromptStatusEl) controlPromptStatusEl.textContent = 'changed';
+  clearTimeout(controlPromptTimer);
+  controlPromptTimer = setTimeout(saveControlPromptNow, 300);
+}
+
+if (controlPromptInjectThresholdEl) {
+  controlPromptInjectThresholdEl.addEventListener('input', scheduleControlPromptSave);
+  controlPromptInjectThresholdEl.addEventListener('change', saveControlPromptNow);
+}
+for (const input of [rawHistoryRoundsEl, rawRecentRoundsEl, memoryExtractFreqEl, memoryExtractRoundsEl]) {
+  if (!input) continue;
+  input.addEventListener('input', scheduleControlPromptSave);
+  input.addEventListener('change', saveControlPromptNow);
+}
+if (controlPromptManualInjectEl) {
+  controlPromptManualInjectEl.addEventListener('click', async () => {
+    if (controlPromptStatusEl) controlPromptStatusEl.textContent = 'inject pending...';
+    try {
+      const data = await postJson('/control-prompt/inject');
+      if (!data.ok) throw new Error(data.error || 'inject failed');
+      updateControlPromptTokenDisplay(data);
+      if (controlPromptStatusEl) controlPromptStatusEl.textContent = 'inject pending';
+    } catch (e) {
+      if (controlPromptStatusEl) controlPromptStatusEl.textContent = 'inject error';
+    }
+  });
+}
+
+function updateControlPromptTokenDisplay(data) {
+  if (controlPromptCurrentEl) {
+    controlPromptCurrentEl.textContent = String(data.control_prompt_current_tokens ?? data.current_tokens ?? 0);
+  }
+  if (controlPromptDeltaEl) {
+    controlPromptDeltaEl.textContent = String(data.control_prompt_delta_tokens ?? data.delta_tokens ?? 0);
+  }
+  if (controlPromptInjectThresholdEl && document.activeElement !== controlPromptInjectThresholdEl) {
+    controlPromptInjectThresholdEl.value = String(data.control_prompt_inject_threshold ?? data.inject_threshold ?? controlPromptInjectThresholdEl.value);
+  }
+  if (rawHistoryRoundsEl && document.activeElement !== rawHistoryRoundsEl) {
+    rawHistoryRoundsEl.value = String(data.raw_history_rounds ?? rawHistoryRoundsEl.value);
+  }
+  if (rawRecentRoundsEl && document.activeElement !== rawRecentRoundsEl) {
+    rawRecentRoundsEl.value = String(data.raw_recent_rounds ?? rawRecentRoundsEl.value);
+  }
+  if (memoryExtractFreqEl && document.activeElement !== memoryExtractFreqEl) {
+    memoryExtractFreqEl.value = String(data.memory_extract_freq ?? memoryExtractFreqEl.value);
+  }
+  if (memoryExtractRoundsEl && document.activeElement !== memoryExtractRoundsEl) {
+    memoryExtractRoundsEl.value = String(data.memory_extract_rounds ?? memoryExtractRoundsEl.value);
+  }
+  if (memoryRoundCurrentEl) {
+    memoryRoundCurrentEl.textContent = String(data.memory_round_current ?? 0);
+  }
+  if (memoryRoundDeltaEl) {
+    memoryRoundDeltaEl.textContent = String(data.memory_round_since_extract ?? 0);
+  }
+}
+
+async function pollState() {
+  if (pollInFlight) return;
+  pollInFlight = true;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2500);
+  try {
+    const res = await fetch('/state', { cache: 'no-store', signal: controller.signal });
+    const data = await res.json();
+    chunkEl.textContent = String(data.chunk_count || 0);
+    volumeEl.textContent = Number(data.volume || 0).toFixed(4);
+    segmentEl.textContent = data.segment || 'idle';
+    updateControlPromptTokenDisplay(data);
+    updateReaderModeBadge(!!data.reader_mode, !!data.reading_mode);
+
+    const transcriptKey = JSON.stringify(data.transcript || []);
+    if (transcriptKey !== lastTranscriptKey) {
+      lastTranscriptKey = transcriptKey;
+      renderLines(outEl, data.transcript || [], 'partial');
+    }
+
+    const counterLines = [
+      `interupt_count: ${data.interupt_count ?? 0} | tts_playing=${data.tts_playing ? 'yes' : 'no'} | mode=${data.interupt_mode ? 'yes' : 'no'} | asr: inflight=${data.asr_inflight ? 'yes' : 'no'} | queue=${data.asr_queue_size ?? 0} | last=${data.last_asr_duration_ms ?? 0}ms`,
+      `interupt_volume: ${Number(data.interupt_last_volume || 0).toFixed(4)}  voice_gate: ${Number(data.active_voice_start_volume || 0).toFixed(4)} | early=${data.tts_early_release_active ? 'yes' : 'no'} | switch_left=${Number(data.interupt_switch_remaining || 0).toFixed(2)}s`,
+      `interrupt_langs: ${(data.interrupt_languages || []).join(', ') || 'all'}`,
+      `interupt qasr: ${data.interupt_qasr_text || ''}`,
+      `${data.interrupt_analyze_last || 'InterruptAnalyze: idle'}`,
+      '----------',
+    ].concat(data.silence_counters || [
+      `StutterCounts: ${data.stuttering_count ?? 0} | char=${data.char_stutter_count ?? 0} | token=${data.token_stutter_count ?? 0}`,
+      `long: ${data.remaining_long_silence_ms ?? 0}/${data.effective_long_silence_ms ?? 0}ms | base: ${data.long_silence_ms ?? 0}ms | asr: {{ turn_detection_silence_ms }}ms | state=${data.segment || 'idle'}`,
+      '----------',
+      data.last_asr_text || '',
+    ]);
+    const counterKey = JSON.stringify(counterLines);
+    if (counterKey !== lastCounterKey) {
+      lastCounterKey = counterKey;
+      renderLines(counterOutEl, counterLines, 'partial');
+    }
+
+    const replyKey = JSON.stringify(data.reply_results || []);
+    if (replyKey !== lastReplyKey) {
+      lastReplyKey = replyKey;
+      renderReply(replyOutEl, data.reply_results || []);
+    }
+
+    const historyView = data.llm_history || [];
+    const historyKey = JSON.stringify(historyView);
+    if (historyKey !== lastHistoryKey) {
+      lastHistoryKey = historyKey;
+      renderHistory(historyOutEl, historyView);
+    }
+
+    const controlPromptHistoryView = data.control_prompt_history || [];
+    const controlPromptHistoryKey = JSON.stringify(controlPromptHistoryView);
+    if (controlPromptHistoryKey !== lastControlPromptHistoryKey) {
+      lastControlPromptHistoryKey = controlPromptHistoryKey;
+      renderHistory(controlPromptHistoryOutEl, controlPromptHistoryView);
+    }
+
+    const routerHistoryView = data.router_history || [];
+    const routerHistoryKey = JSON.stringify(routerHistoryView);
+    if (routerHistoryKey !== lastRouterHistoryKey) {
+      lastRouterHistoryKey = routerHistoryKey;
+      renderHistory(routerHistoryOutEl, routerHistoryView);
+    }
+
+    const readerControlHistoryView = data.reader_control_history || [];
+    const readerControlHistoryKey = JSON.stringify(readerControlHistoryView);
+    if (readerControlHistoryKey !== lastReaderControlHistoryKey) {
+      lastReaderControlHistoryKey = readerControlHistoryKey;
+      renderHistory(readerControlHistoryOutEl, readerControlHistoryView);
+    }
+
+    const ttsKey = JSON.stringify(data.tts_logs || []);
+    if (ttsKey !== lastTtsKey) {
+      lastTtsKey = ttsKey;
+      renderLines(ttsLogEl, data.tts_logs || [], '');
+      ttsLogEl.scrollTop = ttsLogEl.scrollHeight;
+    }
+
+    const errorKey = JSON.stringify(data.errors || []);
+    if (errorKey !== lastErrorKey) {
+      lastErrorKey = errorKey;
+      renderLines(logEl, data.errors || [], 'err');
+    }
+
+    const running = !!data.running;
+    startBtn.disabled = running;
+    stopBtn.disabled = !running;
+  } catch (e) {
+    setBookStatus('poll error');
+  } finally {
+    clearTimeout(timeoutId);
+    pollInFlight = false;
+  }
+}
+
+startBtn.onclick = async () => {
+  try {
+    const data = await postJson('/start');
+    if (data.error) {
+      setBookStatus('start error');
+    }
+  } catch (e) {
+    setBookStatus('start error');
+  }
+};
+
+stopBtn.onclick = async () => {
+  try {
+    await postJson('/stop');
+  } catch (e) {
+    setBookStatus('stop error');
+  }
+};
+
+setInterval(pollState, 200);
+initEditorFiles();
+initBookFiles();
+applyAnalyzeConfigControls('init');
+pollState();
+</script>
+</body>
+</html>

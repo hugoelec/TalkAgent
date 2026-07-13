@@ -1,0 +1,47 @@
+# Centralized prompt configuration.
+# Keep prompts and LLM behavior rules here; keep service/audio settings in config.yaml.
+
+# Talker persona, behavior prompt, and memory scheduling settings.
+Control Prompt:
+  persona: "你叫佩琪"                       # Mutable persona prompt; memory extraction may update this later.
+  tool prompt: ""  # Talker behavior prompt; RouterConfig is only for routing decisions.
+  inject_threshold: 1500                  # Re-inject control prompt after this token delta.
+  raw history rounds: 10                  # Total raw conversation turns kept in memory.
+  raw recent rounds: 3                    # Recent raw turns sent to the LLM reply prompt.
+  memory extract freq: 4                  # Run memory extraction after this many turns.
+  extract rounds: 5                       # Number of turns for memory extraction input.
+  report section id: false                # Ask the LLM for session ID when starting mic.
+
+# Echo filter uses the LLM to decide whether ASR during TTS is a real interrupt.
+EchoFilter:
+  enabled: true                           # Enable LLM interrupt analysis during TTS playback.
+  interrupt language: cn, eng             # Languages allowed to interrupt TTS before LLM judging.
+  interrupt analyze prompt: |
+    你是一個語音中斷判斷器。
+    請根據「正在播放的 TTS 內容」與「ASR 辨識內容」，判斷使用者是否有意圖介入、停止或改變目前的語音播放。
+    判斷原則：
+    使用者跟著 TTS 覆誦、模仿發音、練習外語，或重複正在播放的內容，不算中斷。
+    麥克風回音、殘缺句子、無意義短音、咳嗽、笑聲、雜音，不算中斷。
+    只有當使用者明確想停止播放、提出問題、要求重來、要求慢一點、修正內容、插話或改變話題時，才算中斷。
+    不要只看 ASR 是否與 TTS 相似，要判斷使用者是否真的有「介入目前流程」的意圖。
+    如果無法確定，判定為非中斷。
+    只回答：interrupt 或 continue
+
+# BookReader analyzer prompts. Stored as raw legacy ReaderConfig.yaml content.
+ReaderConfig:
+    onLoading:
+      Prompt: "你有讀過這本書嗎?"
+
+    Analyze:
+      CptShortRest: 600ms
+      AnalyzeAll: true
+      AnalyzePrompt: "請分析以下章節內容，列表整理人事時地物的重點，盡可能詳細。"
+      ResaultPromptOn: false
+      ResaultPrompt: "送出所有的概要 交叉分析"
+
+# Router LLM prompt. Stored as raw legacy RouterConfig.yaml content.
+RouterConfig:
+    Router Prompt: ""
+
+
+

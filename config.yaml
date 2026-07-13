@@ -1,0 +1,82 @@
+﻿# QasrListenerV4 config
+# This file configures ASR, LLM, OmniVoice TTS, Web UI, audio slicing, and turn detection.
+
+# ASR service settings.
+asr:
+  provider: qwen3asr                  # Label for the ASR backend.
+  base_url: "http://127.0.0.1:9000"   # ASR server base URL.
+  endpoint: "/v1/chat/completions"    # ASR API endpoint.
+  model: "Qwen/Qwen3-ASR-1.7B"        # ASR model name.
+  method: chat                        # ASR call mode: chat or transcriptions.
+  max_tokens: 128                     # Maximum ASR output tokens.
+  timeout_sec: 120                    # ASR request timeout in seconds.
+
+# LLM chat service settings.
+llm:
+  provider: vllm                      # Label for the LLM backend.
+  base_url: "http://192.168.66.146:8000/v1" # OpenAI-compatible LLM base URL.
+  endpoint: "/chat/completions"       # Chat completions endpoint.
+  model: "gb10"                       # LLM model name.
+  temperature: 0.7                    # Sampling temperature.
+  max_tokens: 2048                    # Maximum LLM output tokens.
+  stream: true                        # Stream LLM output so TTS can start early.
+  disable_thinking: true              # Disable model thinking mode where supported.
+  extra_body:                         # Extra JSON body merged into LLM requests.
+    chat_template_kwargs:
+      enable_thinking: false          # Qwen chat-template thinking switch.
+  timeout_sec: 120                    # LLM request timeout in seconds.
+
+# OmniVoice TTS settings.
+tts:
+  enabled: true                       # Enable text-to-speech output.
+  base_url: "http://127.0.0.1:8810"   # OmniVoice server base URL.
+  endpoint: "/tts_file"               # OmniVoice TTS endpoint.
+  voice: "cheer/norm"                 # Voice or sample name.
+  language: "auto"                    # TTS language; auto lets OmniVoice detect it.
+  instruct: ""                        # Optional OmniVoice instruction text.
+  speed: 1                            # Speech speed.
+  duration: 0                         # Target duration; 0 means unspecified.
+  num_step: 25                        # Inference steps.
+  guidance_scale: 2.0                 # Guidance strength.
+  denoise: true                       # Enable OmniVoice denoise.
+  queue_ahead: 5                      # Number of TTS chunks to synthesize ahead.
+  group_sentences: 3                  # Number of sentence chunks per TTS packet.
+  interupt_threshold: 1               # ASR hits required to interrupt TTS playback.
+  silence_types:                      # Text patterns removed before TTS.
+    - markdown_bold                   # Remove markdown bold markers.
+    - parentheses                     # Remove parenthesized text.
+  packet_prefix: ""                   # Text prepended to each TTS packet.
+  packet_suffix: ""                   # Text appended to each TTS packet.
+  timeout_sec: 120                    # TTS request timeout in seconds.
+
+# Flask Web UI settings.
+ui:
+  host: 0.0.0.0                       # Bind address for the Web UI.
+  port: 7861                          # Web UI port.
+
+# Local microphone capture and audio slicing settings.
+audio:
+  min_sec: 2.0                        # Minimum segment length before cutting.
+  max_sec: 6.0                        # Maximum segment length before forced cutting.
+  silence_ms: 1000.0                  # Base silence window for audio slicing.
+  cut_rate: 2.0                       # Cut sensitivity; higher cuts more aggressively.
+  cut_tail_ms: 0                      # Extra low-volume tail kept after cut detection.
+  voice_start_volume: 0.003           # Volume gate before speech starts.
+  interupt_volume: 0.008              # Volume gate for TTS interruption.
+  interupt_early_release: 0           # Seconds before TTS end to release interrupt mode.
+  interupt_switch_delay: 0            # Seconds to keep interrupt mode after TTS ends.
+  sample_rate: 16000                  # Microphone sample rate.
+  block_ms: 20                        # Audio callback block size in milliseconds.
+
+# Turn detection after ASR updates.
+turn_detection:
+  silence_ms: 700                     # ASR silence reference value.
+  long_silence_ms: 1000               # Delay after last ASR update before sending to LLM.
+  stutter_extend:                     # Extend turn wait time when ASR appears unstable.
+    enabled: true                     # Enable stutter-based wait extension.
+    mode: hybrid_simple               # Stutter detection mode.
+    stutter_delay_ms: 80              # Extra wait per detected stutter.
+    stutter_delay_max_ms: 600         # Maximum extra stutter wait.
+
+# Optional language list for phonetic ASR output.
+asr_phonetic_output:

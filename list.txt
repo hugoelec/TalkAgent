@@ -1,0 +1,35 @@
+啟動Qasr python mic+++++++++++++++++++
+
+.venv\Scripts\activate
+python Qasrbasic.py
+
+
+
+啟動 OmniVoice++++++++++++++++++++++++++
+conda activate omnivoice
+cd /home/jmc/OmniVoice
+python -m uvicorn omnivoice_api:app --host 0.0.0.0 --port 8810
+
+啟動Qasr
+.venv\Scripts\activate
+python QasrBasic.py
+
+-----------------------------------------------
+pkill -f qwen_asr_remote_streaming_webui.py
+ps aux | grep qwen_asr_remote_streaming_webui
+
+
+gb10位置================================
+http://192.168.66.146:8000/v1/models
++++++++++++++++++++++++++++++++++++++++
+py -3.10 -m venv .venv
+.venv\Scripts\activate
+
+pip install flask requests numpy
+
+
+
+py -3.10 -m venv .venv
+.venv\Scripts\activate
+
+python QasrListener.py 
