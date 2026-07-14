@@ -36,9 +36,7 @@ class TalkerPromptSwitch:
         history = (
             []
             if reader_mode
-            else list(self.engine.llm_history[-self.engine.raw_recent_rounds:])
-            if self.engine.raw_recent_rounds > 0
-            else []
+            else self.engine.memory.recent_llm_history()
         )
 
         if not use_control_prompt:
@@ -179,11 +177,7 @@ class TalkerPromptSwitch:
             "history_rounds": len(history),
             "prompt": prompt,
         }
-        self.engine.reader_control_history.append(record)
-        if self.engine.raw_history_rounds > 0:
-            self.engine.reader_control_history = self.engine.reader_control_history[-self.engine.raw_history_rounds:]
-        else:
-            self.engine.reader_control_history = []
+        self.engine.memory.append_reader_control_record(record)
         return record
 
     def _build_normal_prompt(self, user_text: str) -> str:
@@ -197,12 +191,12 @@ class TalkerPromptSwitch:
                 or ""
             ).strip()
             tool_prompt = str(getattr(self.engine.args, "llm_tool_prompt", "") or "").strip()
-            current_tokens = int(self.engine.control_prompt_current_tokens)
-            delta_tokens = max(0, current_tokens - int(self.engine.control_prompt_token_since_inject))
+            current_tokens = int(self.engine.memory.control_prompt_current_tokens)
+            delta_tokens = self.engine.memory.control_prompt_delta_tokens
             threshold = max(0, int(self.engine.control_prompt_inject_threshold))
             section_id_ready = (not self.engine.report_section_id_enabled) or self.engine.report_section_id_done
-            first_inject = not self.engine.control_prompt_injected_once
-            manual_inject = bool(self.engine.control_prompt_manual_inject)
+            first_inject = not self.engine.memory.control_prompt_injected_once
+            manual_inject = bool(self.engine.memory.control_prompt_manual_inject)
             threshold_inject = delta_tokens > threshold
             should_inject_persona = section_id_ready and bool(persona_prompt) and (
                 first_inject
@@ -226,28 +220,18 @@ class TalkerPromptSwitch:
                 reasons.append(persona_reason)
             control_prompt = "\n\n".join(prompt_parts).strip()
             if control_prompt:
-                self.engine.control_prompt_history.append(
-                    {
-                        "time": time.strftime("%H:%M:%S"),
-                        "reason": "+".join(reasons),
-                        "current_tokens": current_tokens,
-                        "delta_tokens": delta_tokens,
-                        "threshold": threshold,
-                        "persona_chars": len(persona_prompt),
-                        "tool_prompt_chars": len(tool_prompt),
-                        "prompt_chars": len(control_prompt),
-                        "user": user_text,
-                        "prompt": control_prompt,
-                    }
+                self.engine.memory.append_control_prompt_record(
+                    self.engine.memory.build_control_prompt_record(
+                        reasons=reasons,
+                        threshold=threshold,
+                        persona_prompt=persona_prompt,
+                        tool_prompt=tool_prompt,
+                        control_prompt=control_prompt,
+                        user_text=user_text,
+                    )
                 )
-                if self.engine.raw_history_rounds > 0:
-                    self.engine.control_prompt_history = self.engine.control_prompt_history[-self.engine.raw_history_rounds:]
-                else:
-                    self.engine.control_prompt_history = []
             if should_inject_persona:
-                self.engine.control_prompt_injected_once = True
-                self.engine.control_prompt_manual_inject = False
-                self.engine.control_prompt_token_since_inject = current_tokens
+                self.engine.memory.mark_persona_injected(current_tokens)
         if not control_prompt:
             return user_text
         return f"{control_prompt}\n\n[User ASR]\n{user_text}"

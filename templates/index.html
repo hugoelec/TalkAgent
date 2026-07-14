@@ -13,6 +13,7 @@
     button { font-size: 16px; padding: 8px 14px; margin-right: 8px; border-radius: 10px; border: 0; cursor: pointer; }
     #start { background: #2c7; color: #001; }
     #stop { background: #f66; color: #200; }
+    #memReset { background: #224b6b; color: #eaf7ff; }
     .topBar {
       display: flex;
       align-items: center;
@@ -611,6 +612,7 @@
   <div class="topBar">
     <button id="start">Start mic</button>
     <button id="stop" disabled>Stop</button>
+    <button id="memReset" type="button">MemReset</button>
     <div id="controlPromptControls">
       <span>current: <span id="controlPromptCurrent">0</span></span>
       <span>Delta: <span id="controlPromptDelta">0</span></span>
@@ -807,6 +809,7 @@ const readerRuntimeLogEl = document.getElementById('readerRuntimeLog');
 const logEl = document.getElementById('log');
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
+const memResetBtn = document.getElementById('memReset');
 const ttsSettingsStatusEl = document.getElementById('ttsSettingsStatus');
 const controlPromptStatusEl = document.getElementById('controlPromptStatus');
 const controlPromptInjectThresholdEl = document.getElementById('controlPromptInjectThreshold');
@@ -892,6 +895,22 @@ let xhtmlIndexItems = [];
 let readerRuntimeLogs = [];
 let readerAnalyzeRunning = false;
 let analyzerSendQueue = Promise.resolve();
+const browserAudioConstraints = (() => {
+  try {
+    const supported = navigator.mediaDevices?.getSupportedConstraints?.() || {};
+    return {
+      echoCancellation: supported.echoCancellation === true,
+      noiseSuppression: supported.noiseSuppression === true,
+      autoGainControl: supported.autoGainControl === true,
+    };
+  } catch (e) {
+    return {
+      echoCancellation: null,
+      noiseSuppression: null,
+      autoGainControl: null,
+    };
+  }
+})();
 
 function renderLines(container, lines, className) {
   container.innerHTML = '';
@@ -2247,6 +2266,28 @@ function updateControlPromptTokenDisplay(data) {
   }
 }
 
+function supportText(value) {
+  if (value === null) return 'unknown';
+  return value ? 'yes' : 'no';
+}
+
+function browserAecLine(data) {
+  const backend = data.mic_capture_backend || 'unknown';
+  const active = data.browser_aec_active ? 'yes' : 'no';
+  const requested = data.browser_aec_requested ? 'yes' : 'no';
+  const support = supportText(browserAudioConstraints.echoCancellation);
+  const note = data.browser_aec_note ? ` | ${data.browser_aec_note}` : '';
+  return `browser AEC: active=${active} | requested=${requested} | support=${support} | capture=${backend}${note}`;
+}
+
+function browserAudioConstraintLine() {
+  return (
+    `browser audio constraints: echoCancellation=${supportText(browserAudioConstraints.echoCancellation)} | ` +
+    `noiseSuppression=${supportText(browserAudioConstraints.noiseSuppression)} | ` +
+    `autoGainControl=${supportText(browserAudioConstraints.autoGainControl)}`
+  );
+}
+
 async function pollState() {
   if (pollInFlight) return;
   pollInFlight = true;
@@ -2268,6 +2309,8 @@ async function pollState() {
     }
 
     const counterLines = [
+      browserAecLine(data),
+      browserAudioConstraintLine(),
       `interupt_count: ${data.interupt_count ?? 0} | tts_playing=${data.tts_playing ? 'yes' : 'no'} | mode=${data.interupt_mode ? 'yes' : 'no'} | asr: inflight=${data.asr_inflight ? 'yes' : 'no'} | queue=${data.asr_queue_size ?? 0} | last=${data.last_asr_duration_ms ?? 0}ms`,
       `interupt_volume: ${Number(data.interupt_last_volume || 0).toFixed(4)}  voice_gate: ${Number(data.active_voice_start_volume || 0).toFixed(4)} | early=${data.tts_early_release_active ? 'yes' : 'no'} | switch_left=${Number(data.interupt_switch_remaining || 0).toFixed(2)}s`,
       `interrupt_langs: ${(data.interrupt_languages || []).join(', ') || 'all'}`,
@@ -2362,6 +2405,42 @@ stopBtn.onclick = async () => {
     setBookStatus('stop error');
   }
 };
+
+if (memResetBtn) {
+  memResetBtn.onclick = async () => {
+    memResetBtn.disabled = true;
+    try {
+      const data = await postJson('/mem-reset');
+      if (!data.ok) throw new Error(data.error || 'mem reset failed');
+      lastTranscriptKey = '';
+      lastCounterKey = '';
+      lastReplyKey = '';
+      lastHistoryKey = '';
+      lastControlPromptHistoryKey = '';
+      lastRouterHistoryKey = '';
+      lastReaderControlHistoryKey = '';
+      lastTtsKey = '';
+      lastErrorKey = '';
+      renderLines(outEl, [], 'partial');
+      renderLines(counterOutEl, [], 'partial');
+      renderReply(replyOutEl, []);
+      renderHistory(memoryOutEl, []);
+      renderHistory(historyOutEl, []);
+      renderHistory(controlPromptHistoryOutEl, []);
+      renderHistory(routerHistoryOutEl, []);
+      renderHistory(readerControlHistoryOutEl, []);
+      renderLines(ttsLogEl, [], '');
+      renderLines(logEl, [], 'err');
+      updateControlPromptTokenDisplay(data);
+      await pollState();
+      setBookStatus('memory reset');
+    } catch (e) {
+      setBookStatus('mem reset error');
+    } finally {
+      memResetBtn.disabled = false;
+    }
+  };
+}
 
 setInterval(pollState, 200);
 initEditorFiles();
