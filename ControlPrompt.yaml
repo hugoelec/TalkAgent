@@ -30,9 +30,9 @@ EchoFilter:
 # BookReader analyzer prompts. Stored as raw legacy ReaderConfig.yaml content.
 ReaderConfig:
     onLoading:
-      Prompt: "知道這本書嗎?"
+      Prompt: "知道這本書嗎?如果沒有請明說"
     StartReading:
-      Prompt: "說開始分析"
+      Prompt: "用不同的語氣說開始分析"
     onReading:
       Prompt: "用兩句描述故事"
 
