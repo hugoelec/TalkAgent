@@ -149,11 +149,13 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
                 engine.raw_recent_rounds = max(0, int(control_section.get("raw recent rounds", control_section.get("raw_recent_rounds", 3))))
                 args.raw_recent_rounds = engine.raw_recent_rounds
             if "memory extract freq" in control_section or "memory_extract_freq" in control_section:
-                engine.memory_extract_freq = max(0, int(control_section.get("memory extract freq", control_section.get("memory_extract_freq", 0))))
-                args.memory_extract_freq = engine.memory_extract_freq
+                engine.memory.set_memory_extract_config(
+                    freq=int(control_section.get("memory extract freq", control_section.get("memory_extract_freq", 0)))
+                )
             if "extract rounds" in control_section or "extract_rounds" in control_section:
-                engine.memory_extract_rounds = max(0, int(control_section.get("extract rounds", control_section.get("extract_rounds", 0))))
-                args.memory_extract_rounds = engine.memory_extract_rounds
+                engine.memory.set_memory_extract_config(
+                    rounds=int(control_section.get("extract rounds", control_section.get("extract_rounds", 0)))
+                )
         if echo_section:
             engine.echo_filter_enabled = bool(echo_section.get("enabled", engine.echo_filter_enabled))
             lang_value = echo_section.get("interrupt language", echo_section.get("interrupt_language", ""))
@@ -591,8 +593,8 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             control_prompt_inject_threshold=int(engine.control_prompt_inject_threshold),
             raw_history_rounds=int(getattr(args, "raw_history_rounds", 10)),
             raw_recent_rounds=int(getattr(args, "raw_recent_rounds", 3)),
-            memory_extract_freq=int(getattr(args, "memory_extract_freq", 5)),
-            memory_extract_rounds=int(getattr(args, "memory_extract_rounds", 10)),
+            memory_extract_freq=int(engine.memory.memory_extract_freq),
+            memory_extract_rounds=int(engine.memory.memory_extract_rounds),
         )
 
     @app.get("/tts-settings")
@@ -641,17 +643,17 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
                 "control_prompt": str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
                 "persona_prompt": str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
                 "tool_prompt": str(getattr(args, "llm_tool_prompt", "")),
-                "current_tokens": int(engine.control_prompt_current_tokens),
-                "token_since_inject": int(engine.control_prompt_token_since_inject),
-                "delta_tokens": max(0, int(engine.control_prompt_current_tokens) - int(engine.control_prompt_token_since_inject)),
+                "current_tokens": int(engine.memory.control_prompt_current_tokens),
+                "token_since_inject": int(engine.memory.control_prompt_token_since_inject),
+                "delta_tokens": int(engine.memory.control_prompt_delta_tokens),
                 "inject_threshold": int(engine.control_prompt_inject_threshold),
-                "manual_inject": bool(engine.control_prompt_manual_inject),
+                "manual_inject": bool(engine.memory.control_prompt_manual_inject),
                 "raw_history_rounds": int(engine.raw_history_rounds),
                 "raw_recent_rounds": int(engine.raw_recent_rounds),
-                "memory_round_current": int(engine.memory_round_current),
-                "memory_round_since_extract": int(engine.memory_round_since_extract),
-                "memory_extract_freq": int(engine.memory_extract_freq),
-                "memory_extract_rounds": int(engine.memory_extract_rounds),
+                "memory_round_current": int(engine.memory.memory_round_current),
+                "memory_round_since_extract": int(engine.memory.memory_round_since_extract),
+                "memory_extract_freq": int(engine.memory.memory_extract_freq),
+                "memory_extract_rounds": int(engine.memory.memory_extract_rounds),
             }
 
     @app.post("/control-prompt")
@@ -670,60 +672,50 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             if raw_history_rounds is not None:
                 engine.raw_history_rounds = max(0, int(raw_history_rounds))
                 args.raw_history_rounds = engine.raw_history_rounds
-                if engine.raw_history_rounds > 0:
-                    engine.llm_history = engine.llm_history[-engine.raw_history_rounds:]
-                    engine.control_prompt_history = engine.control_prompt_history[-engine.raw_history_rounds:]
-                    engine.router_history = engine.router_history[-engine.raw_history_rounds:]
-                else:
-                    engine.llm_history = []
-                    engine.control_prompt_history = []
-                    engine.router_history = []
+                engine.memory.trim_all()
             if raw_recent_rounds is not None:
                 engine.raw_recent_rounds = max(0, int(raw_recent_rounds))
                 args.raw_recent_rounds = engine.raw_recent_rounds
-            if memory_extract_freq is not None:
-                engine.memory_extract_freq = max(0, int(memory_extract_freq))
-                args.memory_extract_freq = engine.memory_extract_freq
-            if memory_extract_rounds is not None:
-                engine.memory_extract_rounds = max(0, int(memory_extract_rounds))
-                args.memory_extract_rounds = engine.memory_extract_rounds
+            engine.memory.set_memory_extract_config(
+                freq=int(memory_extract_freq) if memory_extract_freq is not None else None,
+                rounds=int(memory_extract_rounds) if memory_extract_rounds is not None else None,
+            )
         with engine.llm_control_prompt_lock:
             return jsonify(
                 ok=True,
                 control_prompt=str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
                 persona_prompt=str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
                 tool_prompt=str(getattr(args, "llm_tool_prompt", "")),
-                current_tokens=int(engine.control_prompt_current_tokens),
-                token_since_inject=int(engine.control_prompt_token_since_inject),
-                delta_tokens=max(0, int(engine.control_prompt_current_tokens) - int(engine.control_prompt_token_since_inject)),
+                current_tokens=int(engine.memory.control_prompt_current_tokens),
+                token_since_inject=int(engine.memory.control_prompt_token_since_inject),
+                delta_tokens=int(engine.memory.control_prompt_delta_tokens),
                 inject_threshold=int(engine.control_prompt_inject_threshold),
-                manual_inject=bool(engine.control_prompt_manual_inject),
+                manual_inject=bool(engine.memory.control_prompt_manual_inject),
                 raw_history_rounds=int(engine.raw_history_rounds),
                 raw_recent_rounds=int(engine.raw_recent_rounds),
-                memory_round_current=int(engine.memory_round_current),
-                memory_round_since_extract=int(engine.memory_round_since_extract),
-                memory_extract_freq=int(engine.memory_extract_freq),
-                memory_extract_rounds=int(engine.memory_extract_rounds),
+                memory_round_current=int(engine.memory.memory_round_current),
+                memory_round_since_extract=int(engine.memory.memory_round_since_extract),
+                memory_extract_freq=int(engine.memory.memory_extract_freq),
+                memory_extract_rounds=int(engine.memory.memory_extract_rounds),
             )
 
     @app.post("/control-prompt/inject")
     def manual_inject_control_prompt() -> Response:
         with engine.llm_control_prompt_lock:
-            engine.control_prompt_token_since_inject = int(engine.control_prompt_current_tokens)
-            engine.control_prompt_manual_inject = True
+            engine.memory.mark_manual_inject()
             return jsonify(
                 ok=True,
-                current_tokens=int(engine.control_prompt_current_tokens),
-                token_since_inject=int(engine.control_prompt_token_since_inject),
-                delta_tokens=max(0, int(engine.control_prompt_current_tokens) - int(engine.control_prompt_token_since_inject)),
+                current_tokens=int(engine.memory.control_prompt_current_tokens),
+                token_since_inject=int(engine.memory.control_prompt_token_since_inject),
+                delta_tokens=int(engine.memory.control_prompt_delta_tokens),
                 inject_threshold=int(engine.control_prompt_inject_threshold),
-                manual_inject=bool(engine.control_prompt_manual_inject),
+                manual_inject=bool(engine.memory.control_prompt_manual_inject),
                 raw_history_rounds=int(engine.raw_history_rounds),
                 raw_recent_rounds=int(engine.raw_recent_rounds),
-                memory_round_current=int(engine.memory_round_current),
-                memory_round_since_extract=int(engine.memory_round_since_extract),
-                memory_extract_freq=int(engine.memory_extract_freq),
-                memory_extract_rounds=int(engine.memory_extract_rounds),
+                memory_round_current=int(engine.memory.memory_round_current),
+                memory_round_since_extract=int(engine.memory.memory_round_since_extract),
+                memory_extract_freq=int(engine.memory.memory_extract_freq),
+                memory_extract_rounds=int(engine.memory.memory_extract_rounds),
             )
 
     @app.get("/editor-files")
@@ -1102,16 +1094,16 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             "llm_control_prompt": args.llm_control_prompt,
             "llm_persona_prompt": getattr(args, "llm_persona_prompt", args.llm_control_prompt),
             "llm_tool_prompt": getattr(args, "llm_tool_prompt", ""),
-            "control_prompt_current_tokens": engine.control_prompt_current_tokens,
-            "control_prompt_token_since_inject": engine.control_prompt_token_since_inject,
+            "control_prompt_current_tokens": engine.memory.control_prompt_current_tokens,
+            "control_prompt_token_since_inject": engine.memory.control_prompt_token_since_inject,
             "control_prompt_inject_threshold": engine.control_prompt_inject_threshold,
             "raw_history_rounds": engine.raw_history_rounds,
             "raw_recent_rounds": engine.raw_recent_rounds,
             "interrupt_languages": sorted(engine.interrupt_languages),
-            "memory_round_current": engine.memory_round_current,
-            "memory_round_since_extract": engine.memory_round_since_extract,
-            "memory_extract_freq": engine.memory_extract_freq,
-            "memory_extract_rounds": engine.memory_extract_rounds,
+            "memory_round_current": engine.memory.memory_round_current,
+            "memory_round_since_extract": engine.memory.memory_round_since_extract,
+            "memory_extract_freq": engine.memory.memory_extract_freq,
+            "memory_extract_rounds": engine.memory.memory_extract_rounds,
             "tts_engine": "omnivoice",
             "tts_enabled": args.tts_enabled,
             "tts_base_url": args.tts_base_url,
@@ -1150,6 +1142,11 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
     @app.post("/stop")
     def stop() -> Dict[str, Any]:
         engine.stop()
+        return {"ok": True, **engine.snapshot()}
+
+    @app.post("/mem-reset")
+    def mem_reset() -> Dict[str, Any]:
+        engine.memory.reset_history()
         return {"ok": True, **engine.snapshot()}
 
     return app

@@ -1,0 +1,42 @@
+啟動OmniVoice+++++++++++++++++++++++++++++++++++++++++++
+
+cd ~/OmniVoice
+conda activate omnivoice
+python -m uvicorn OmniVoiceApi:app --host 0.0.0.0 --port 8810
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+conda create -n omnivoice python=3.11 -y
+conda activate omnivoice
+
+# Install pytorch with your CUDA version, e.g.
+pip install torch==2.8.0+cu128 torchaudio==2.8.0+cu128 --extra-index-url https://download.pytorch.org/whl/cu128
+
+# For development (clone first, editable install)
+git clone https://github.com/k2-fsa/OmniVoice.git
+cd OmniVoice
+pip install -e .
+
+簡易Demo +++++++++++++++++++++++++++++++
+cd ~/OmniVoice
+conda activate omnivoice
+omnivoice-demo --ip 0.0.0.0 --port 8001
+
+
+
+
+
+
+curl -X POST http://localhost:8810/tts_file ^
+  -H "Content-Type: application/json" ^
+  -d "{\"text\":\"こんにちは。これは jpChild の声を使った音声合成テストです。\",\"voice\":\"jpChild\",\"language\":\"ja\",\"speed\":1.0,\"num_step\":32,\"guidance_scale\":2.0,\"denoise\":true,\"postprocess_output\":true}" ^
+  --output jpChild_test1.wav
+
+curl -X POST http://localhost:8810/tts_file ^
+  -H "Content-Type: application/json" ^
+  -d "{\"text\":\"こんにちは。這是啊 jpChild sythesize voice test desu 旺旺喵.\",\"voice\":\"jpChild\",\"language\":\"ja\",\"speed\":1.0,\"num_step\":32,\"guidance_scale\":2.0,\"denoise\":true,\"postprocess_output\":true}" ^
+  --output jpChild_test.wav
+
+curl -X POST http://localhost:8810/tts_file ^
+  -H "Content-Type: application/json" ^
+  -d "{\"text\":\"こんにちは。これは jpChild の声を使った音声合成テストです。\",\"voice\":\"girl_cute\",\"language\":\"ja\",\"speed\":0.5,\"num_step\":32,\"guidance_scale\":2.0,\"denoise\":true,\"postprocess_output\":true}" ^
+  --output girl_cute_test1.wav

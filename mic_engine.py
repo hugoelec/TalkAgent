@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import argparse
-from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 import queue
 import re
@@ -9,27 +8,23 @@ import threading
 import time
 from typing import Any, Dict, List
 
-import emoji
 import numpy as np
 import sounddevice as sd
 import yaml
 
 from asr_client import ASRClient
-from audio_utils import wav_result_to_audio
+from conversation_memory import ConversationMemory
+from interrupt_judge import InterruptJudge
 from llm_client import LLMClient
 from omnivoice_tts_client import OmniVoiceTTSClient
 from phonetic_converter import convert_phonetic, normalize_language_code
 from stutter_counter import build_stutter_text, calc_effective_long_silence_ms
 from talker_prompt_switch import TalkerPromptSwitch
 from transcript_formatter import format_mixed_language_turn
+from tts_pipeline import TtsPipeline
 
 
-TTS_CLAUSE_CHUNKS = re.compile(r"[^.!?,;:\u3002\uFF01\uFF1F\uFF0C\u3001\uFF1B\uFF1A]+[.!?,;:\u3002\uFF01\uFF1F\uFF0C\u3001\uFF1B\uFF1A]+")
-MARKDOWN_BOLD_TEXT = re.compile(r"\*\*(.*?)\*\*")
-PARENTHETICAL_TEXT = re.compile(r"\([^()]*\)|\uFF08[^\uFF08\uFF09]*\uFF09")
-UNFINISHED_PARENTHETICAL_TEXT = re.compile(r"\([^()]*$|\uFF08[^\uFF08\uFF09]*$")
 CONTROL_CODE_TEXT = re.compile(r"%%[^%\r\n]{1,80}%%")
-SPEAKABLE_TEXT = re.compile(r"[\w\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", re.UNICODE)
 
 
 def calc_volume(float32: np.ndarray) -> float:
@@ -38,38 +33,8 @@ def calc_volume(float32: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(float32, dtype=np.float32), dtype=np.float32)))
 
 
-def sanitize_tts_text(text: str, silence_types: set[str]) -> str:
-    result = strip_control_codes(text)
-    result = emoji.replace_emoji(result, replace="")
-    if "markdown_bold" in silence_types or "bold" in silence_types:
-        result = MARKDOWN_BOLD_TEXT.sub(r"\1", result)
-        result = result.replace("**", "")
-    if "parentheses" in silence_types or "parenthesis" in silence_types:
-        previous = None
-        while previous != result:
-            previous = result
-            result = PARENTHETICAL_TEXT.sub("", result)
-        result = UNFINISHED_PARENTHETICAL_TEXT.sub("", result)
-    return re.sub(r"\s+", " ", result).strip()
-
-
 def strip_control_codes(text: str) -> str:
     return CONTROL_CODE_TEXT.sub("", str(text or "")).strip()
-
-
-def has_unclosed_parenthetical(text: str) -> bool:
-    ascii_depth = 0
-    wide_depth = 0
-    for char in text:
-        if char == "(":
-            ascii_depth += 1
-        elif char == ")" and ascii_depth > 0:
-            ascii_depth -= 1
-        elif char == "\uFF08":
-            wide_depth += 1
-        elif char == "\uFF09" and wide_depth > 0:
-            wide_depth -= 1
-    return ascii_depth > 0 or wide_depth > 0
 
 
 def estimate_token_count(text: str) -> int:
@@ -105,6 +70,8 @@ class MicEngine:
         self.asr_client = ASRClient(args)
         self.llm_client = LLMClient(args)
         self.tts_client = OmniVoiceTTSClient(args)
+        self.tts_pipeline = TtsPipeline(self)
+        self.memory = ConversationMemory(self)
         self.talker_prompt_switch = TalkerPromptSwitch(self)
         config_path = Path(str(getattr(args, "config", "config.yaml"))).resolve()
         self.control_prompt_config_path = config_path.parent / "ControlPrompt.yaml"
@@ -130,7 +97,6 @@ class MicEngine:
         self.tts_logs: List[str] = []
         self.prev_tts_chunk = ""
         self.current_tts_chunk = ""
-        self.llm_history: List[dict[str, Any]] = []
         self.llm_pending_stop_at = ""
         self.reader_mode = False
         self.reading_mode = False
@@ -140,20 +106,9 @@ class MicEngine:
         self.talker_prompt_mode = "normal"
         self.errors: List[str] = []
         self.llm_control_prompt_lock = threading.Lock()
-        self.control_prompt_current_tokens = 0
-        self.control_prompt_token_since_inject = 0
         self.control_prompt_inject_threshold = max(0, int(getattr(self.args, "llm_control_prompt_inject_threshold", 1000000)))
-        self.control_prompt_injected_once = False
-        self.control_prompt_manual_inject = False
-        self.control_prompt_history: List[dict[str, Any]] = []
-        self.router_history: List[dict[str, Any]] = []
-        self.reader_control_history: List[dict[str, Any]] = []
         self.raw_history_rounds = max(0, int(getattr(self.args, "raw_history_rounds", 10)))
         self.raw_recent_rounds = max(0, int(getattr(self.args, "raw_recent_rounds", 3)))
-        self.memory_round_current = 0
-        self.memory_round_since_extract = 0
-        self.memory_extract_freq = max(0, int(getattr(self.args, "memory_extract_freq", 0)))
-        self.memory_extract_rounds = max(0, int(getattr(self.args, "memory_extract_rounds", 0)))
         self.report_section_id_enabled = bool(getattr(self.args, "llm_report_section_id", False))
         self.report_section_id_inflight = False
         self.report_section_id_done = False
@@ -177,6 +132,7 @@ class MicEngine:
         self.interrupt_languages = set(getattr(self.args, "interrupt_languages", set()) or set())
         self.interrupt_analyze_prompt = str(getattr(self.args, "interrupt_analyze_prompt", "") or "")
         self.interrupt_analyze_last = "InterruptAnalyze: idle"
+        self.interrupt_judge = InterruptJudge(self)
         self.current_llm_cancel_event: threading.Event | None = None
         self.current_llm_user_text = ""
         self.current_llm_reply_index: int | None = None
@@ -279,22 +235,7 @@ class MicEngine:
                 "transcript": list(self.transcript),
                 "silence_counters": list(self.silence_counters),
                 "reply_results": list(self.reply_results),
-                "llm_history": list(self.llm_history[-self.raw_history_rounds:]) if self.raw_history_rounds > 0 else [],
-                "control_prompt_history": (
-                    list(self.control_prompt_history[-self.raw_history_rounds:])
-                    if self.raw_history_rounds > 0
-                    else []
-                ),
-                "router_history": (
-                    list(self.router_history[-self.raw_history_rounds:])
-                    if self.raw_history_rounds > 0
-                    else []
-                ),
-                "reader_control_history": (
-                    list(self.reader_control_history[-self.raw_history_rounds:])
-                    if self.raw_history_rounds > 0
-                    else []
-                ),
+                **self.memory.snapshot_fields(),
                 "reader_mode": self.reader_mode,
                 "reading_mode": self.reading_mode,
                 "reader_context_chars": len(self.reader_analyze_resault or ""),
@@ -326,18 +267,14 @@ class MicEngine:
                 "interupt_count": self.interupt_count,
                 "interupt_qasr_text": self.interupt_qasr_text,
                 "interupt_last_volume": self.interupt_last_volume,
+                "mic_capture_backend": "sounddevice",
+                "browser_aec_requested": False,
+                "browser_aec_active": False,
+                "browser_aec_note": "Browser echoCancellation is not in the active capture path.",
                 "echo_filter_enabled": self.echo_filter_enabled,
                 "interrupt_languages": sorted(self.interrupt_languages),
                 "interrupt_analyze_last": self.interrupt_analyze_last,
-                "control_prompt_current_tokens": self.control_prompt_current_tokens,
-                "control_prompt_token_since_inject": self.control_prompt_token_since_inject,
-                "control_prompt_delta_tokens": max(0, self.control_prompt_current_tokens - self.control_prompt_token_since_inject),
                 "control_prompt_inject_threshold": self.control_prompt_inject_threshold,
-                "control_prompt_manual_inject": self.control_prompt_manual_inject,
-                "memory_round_current": self.memory_round_current,
-                "memory_round_since_extract": self.memory_round_since_extract,
-                "memory_extract_freq": self.memory_extract_freq,
-                "memory_extract_rounds": self.memory_extract_rounds,
             }
 
     def shutdown(self) -> None:
@@ -536,12 +473,12 @@ class MicEngine:
                     self.status = f"{'recording' if self.running else 'stopped'} {self.args.sample_rate} Hz"
 
                 if text and interrupt_candidate:
-                    if self._interrupt_language_allowed(lang):
-                        decision = self._interrupt_analyze_decision(line, lang)
+                    if self.interrupt_judge.language_allowed(lang):
+                        decision = self.interrupt_judge.analyze_decision(line, lang)
                     else:
                         allowed = ",".join(sorted(self.interrupt_languages)) or "(none)"
                         decision = "continue"
-                        self._record_interrupt_analyze_result(
+                        self.interrupt_judge.record_result(
                             line,
                             decision,
                             f"language_blocked lang={lang or '-'} allowed={allowed}",
@@ -679,17 +616,16 @@ class MicEngine:
         if self.llm_pending_stop_at:
             active_reply = self._active_llm_reply_text_locked()
             if active_reply and self.current_llm_user_text:
-                self._upsert_llm_history_locked(
+                self.memory.upsert_llm_history(
                     self.current_llm_user_text,
                     active_reply,
                     f"stop_at: {self.llm_pending_stop_at}",
                 )
-            elif (
-                self.current_llm_user_text
-                and self.llm_history
-                and self.llm_history[-1].get("user") == strip_control_codes(self.current_llm_user_text)
-            ):
-                self.llm_history[-1]["state"] = strip_control_codes(f"stop_at: {self.llm_pending_stop_at}")
+            elif self.current_llm_user_text:
+                self.memory.update_last_state_for_user(
+                    self.current_llm_user_text,
+                    f"stop_at: {self.llm_pending_stop_at}",
+                )
         if self.current_llm_cancel_event is not None:
             self.current_llm_cancel_event.set()
         if self.tts_cancel_event is not None:
@@ -706,99 +642,6 @@ class MicEngine:
         self.last_asr_text = interupt_text
         self.last_asr_update_ts = None
         return interupt_text
-
-    def _interrupt_language_allowed(self, lang: str) -> bool:
-        if not self.interrupt_languages:
-            return True
-        normalized = str(lang or "").strip().lower()
-        if not normalized:
-            return False
-        aliases = {normalized}
-        if normalized in {"en", "eng", "english"}:
-            aliases.update({"en", "eng", "english"})
-        if normalized in {"cn", "zh", "zh-cn", "zho", "chinese"}:
-            aliases.update({"cn", "zh", "zh-cn", "zho", "chinese"})
-        return bool(aliases & self.interrupt_languages)
-
-    def _interrupt_analyze_decision(self, asr_text: str, lang: str) -> str:
-        with self.lock:
-            enabled = self.echo_filter_enabled
-            prompt = self.interrupt_analyze_prompt.strip()
-            current_tts = self.current_tts_chunk.strip()
-            prev_tts = self.prev_tts_chunk.strip()
-
-        if not enabled:
-            return "interrupt"
-        if not prompt:
-            self._record_interrupt_analyze_result(asr_text, "continue", f"missing_prompt lang={lang or '-'}")
-            return "continue"
-
-        tts_text = "\n".join(part for part in [prev_tts, current_tts] if part).strip()
-        judge_prompt = (
-            f"{prompt}\n\n"
-            f"正在播放的 TTS 內容：\n{tts_text or '(empty)'}\n\n"
-            f"ASR 辨識內容：\n{asr_text}\n\n"
-            "請只回答 interrupt 或 continue。"
-        )
-        try:
-            reply = "".join(self.llm_client.stream_reply(judge_prompt, history=[])).strip()
-        except Exception as exc:
-            self._record_interrupt_analyze_result(asr_text, "continue", f"error={exc!r} lang={lang or '-'}")
-            return "continue"
-
-        normalized = re.sub(r"[^a-z]", "", reply.lower())
-        decision = "interrupt" if normalized.startswith("interrupt") else "continue"
-        self._record_interrupt_analyze_result(asr_text, decision, f"{reply} lang={lang or '-'}")
-        return decision
-
-    def _record_interrupt_analyze_result(self, asr_text: str, decision: str, reply: str) -> None:
-        asr_preview = str(asr_text or "").replace("\n", " ")[:160]
-        reply_preview = str(reply or "").replace("\n", " ")[:160]
-        line = f"InterruptAnalyze: decision={decision} asr={asr_preview} llm={reply_preview}"
-        record = {
-            "asr": str(asr_text or ""),
-            "decision": decision,
-            "llm": str(reply or ""),
-            "tts": "",
-        }
-        with self.lock:
-            self.interrupt_analyze_last = line
-            record["tts"] = strip_control_codes(self.current_tts_chunk)
-            self._append_interrupt_history_locked(record)
-            self._push_log_locked(f"[InterruptAnalyze] {line}")
-
-    def _append_interrupt_history_locked(self, record: dict[str, str]) -> None:
-        active_reply = self._active_llm_reply_text_locked()
-        active_user = self.current_llm_user_text
-        if not (active_reply and active_user):
-            return
-        self._upsert_llm_history_locked(active_user, active_reply, "speaking")
-        if not self.llm_history or self.llm_history[-1].get("user") != strip_control_codes(active_user):
-            return
-        interrupts = self.llm_history[-1].setdefault("interrupts", [])
-        if isinstance(interrupts, list):
-            interrupts.append(record)
-
-    def _upsert_llm_history_locked(self, user_text: str, assistant_text: str, state: str) -> None:
-        user = strip_control_codes(user_text)
-        assistant = strip_control_codes(assistant_text)
-        history_state = strip_control_codes(state)
-        if not user or not assistant:
-            return
-        if self.llm_history and self.llm_history[-1].get("user") == user:
-            self.llm_history[-1]["assistant"] = assistant
-            self.llm_history[-1]["state"] = history_state
-        else:
-            self.llm_history.append({"user": user, "assistant": assistant, "state": history_state})
-            self.memory_round_current += 1
-            if self.memory_round_current > self.raw_recent_rounds:
-                self.memory_round_since_extract += 1
-                if self.memory_extract_freq > 0 and self.memory_round_since_extract >= self.memory_extract_freq:
-                    self.memory_round_since_extract = 0
-        if self.raw_history_rounds > 0:
-            self.llm_history = self.llm_history[-self.raw_history_rounds:]
-        else:
-            self.llm_history = []
 
     def _active_llm_reply_text_locked(self) -> str:
         reply_index = self.current_llm_reply_index
@@ -899,21 +742,16 @@ class MicEngine:
     ) -> None:
         response_parts: List[str] = []
         tts_queue: "queue.Queue[str | None]" = queue.Queue(maxsize=max(1, int(self.args.tts_queue_ahead)))
-        tts_thread = None
         cancel_event = threading.Event()
         tts_enabled = bool(self.args.tts_enabled) if enable_tts is None else bool(enable_tts)
         if tts_enabled:
-            tts_thread = threading.Thread(
-                target=self._tts_worker,
-                args=(tts_queue, cancel_event),
-                name="omnivoice-worker",
-                daemon=True,
-            )
-            tts_thread.start()
+            self.tts_pipeline.start_worker(tts_queue, cancel_event)
         sentence_buffer = ""
         sentence_group: List[str] = []
+        reset_generation = 0
         try:
             with self.lock:
+                reset_generation = self.memory.reset_generation
                 self.llm_inflight = True
                 self.current_llm_cancel_event = cancel_event
                 self.current_llm_user_text = user_text
@@ -936,7 +774,7 @@ class MicEngine:
             history = prompt_result.history
             with self.lock:
                 self.talker_prompt_mode = prompt_result.mode
-                self.control_prompt_current_tokens += estimate_token_count(llm_user_text)
+                self.memory.add_control_prompt_tokens(estimate_token_count(llm_user_text))
             for delta in self.llm_client.stream_reply(llm_user_text, history=history):
                 if cancel_event.is_set():
                     break
@@ -944,17 +782,17 @@ class MicEngine:
                     continue
                 response_parts.append(delta)
                 with self.lock:
-                    self.control_prompt_current_tokens += estimate_token_count(delta)
+                    self.memory.add_control_prompt_tokens(estimate_token_count(delta))
                     if reply_index < len(self.reply_results):
                         self.reply_results[reply_index]["text"] += delta
                 if tts_enabled:
-                    sentence_buffer, sentence_group = self._queue_tts_sentences(
+                    sentence_buffer, sentence_group = self.tts_pipeline.queue_sentences(
                         tts_queue,
                         sentence_buffer + delta,
                         sentence_group,
                     )
             if tts_enabled and not cancel_event.is_set():
-                self._flush_tts_tail(tts_queue, sentence_buffer, sentence_group)
+                self.tts_pipeline.flush_tail(tts_queue, sentence_buffer, sentence_group)
             response_text = "".join(response_parts).strip()
             should_route = False
             with self.lock:
@@ -963,8 +801,10 @@ class MicEngine:
                 if interrupted:
                     stop_at = (self.llm_pending_stop_at or self.current_tts_chunk).strip()
                     self.llm_pending_stop_at = ""
+                if not self.memory.is_current_generation(reset_generation):
+                    response_text = ""
                 if response_text:
-                    self._upsert_llm_history_locked(
+                    self.memory.upsert_llm_history(
                         user_text,
                         response_text,
                         f"stop_at: {stop_at}" if stop_at else "finish_round",
@@ -983,29 +823,32 @@ class MicEngine:
             if should_route:
                 threading.Thread(
                     target=self._run_router_after_turn,
-                    args=(user_text, response_text),
+                    args=(user_text, response_text, reset_generation),
                     name="router-after-turn",
                     daemon=True,
                 ).start()
         except Exception as exc:
             with self.lock:
-                if reply_index < len(self.reply_results):
+                history_still_current = self.memory.is_current_generation(reset_generation)
+                if history_still_current and reply_index < len(self.reply_results):
                     self.reply_results[reply_index]["text"] += f"[LLM error: {exc!r}]"
                 self.llm_inflight = False
                 if self.current_llm_cancel_event is cancel_event:
                     self.current_llm_cancel_event = None
                     self.current_llm_user_text = ""
                     self.current_llm_reply_index = None
-                self.errors.append(f"llm error: {exc!r}")
-                self.errors = self.errors[-100:]
+                if history_still_current:
+                    self.errors.append(f"llm error: {exc!r}")
+                    self.errors = self.errors[-100:]
                 if section_id_turn:
-                    self._push_log_locked(f"[SectionID] error via LLM turn: {exc!r}")
+                    if history_still_current:
+                        self._push_log_locked(f"[SectionID] error via LLM turn: {exc!r}")
                     self.report_section_id_inflight = False
                     self.report_section_id_done = True
         finally:
             if tts_enabled:
                 if cancel_event.is_set():
-                    self._drain_tts_queue(tts_queue)
+                    self.tts_pipeline.drain_queue(tts_queue)
                 tts_queue.put(None)
 
     def _read_router_prompt(self) -> str:
@@ -1054,7 +897,15 @@ class MicEngine:
             )
         return prompt
 
-    def _run_router_after_turn(self, user_text: str, assistant_text: str) -> None:
+    def _run_router_after_turn(
+        self,
+        user_text: str,
+        assistant_text: str,
+        reset_generation: int | None = None,
+    ) -> None:
+        with self.lock:
+            if not self.memory.is_current_generation(reset_generation):
+                return
         router_prompt = self._read_router_prompt()
         if not router_prompt:
             return
@@ -1065,7 +916,9 @@ class MicEngine:
             reply = "".join(self.llm_client.stream_reply(router_user_text, history=[])).strip()
         except Exception as exc:
             with self.lock:
-                self.router_history.append(
+                if not self.memory.is_current_generation(reset_generation):
+                    return
+                self.memory.append_router_record(
                     {
                         "time": time.strftime("%H:%M:%S"),
                         "user": strip_control_codes(user_text),
@@ -1076,17 +929,15 @@ class MicEngine:
                         "error": repr(exc),
                     }
                 )
-                if self.raw_history_rounds > 0:
-                    self.router_history = self.router_history[-self.raw_history_rounds:]
-                else:
-                    self.router_history = []
             self._push_error(f"router error: {exc!r}")
             return
         for code in CONTROL_CODE_TEXT.findall(reply):
             if code not in codes:
                 codes.append(code)
         with self.lock:
-            self.router_history.append(
+            if not self.memory.is_current_generation(reset_generation):
+                return
+            self.memory.append_router_record(
                 {
                     "time": time.strftime("%H:%M:%S"),
                     "user": strip_control_codes(user_text),
@@ -1096,10 +947,6 @@ class MicEngine:
                     "codes": codes,
                 }
             )
-            if self.raw_history_rounds > 0:
-                self.router_history = self.router_history[-self.raw_history_rounds:]
-            else:
-                self.router_history = []
         if not codes:
             return
         route_text = "\n".join(codes)
@@ -1107,206 +954,6 @@ class MicEngine:
             self.reply_results.append({"role": "router", "text": route_text})
             self.reply_results = self.reply_results[-400:]
             self._push_log_locked(f"[Router] {route_text.replace(chr(10), ' ')}")
-
-    def _queue_tts_sentences(
-        self,
-        tts_queue: "queue.Queue[str | None]",
-        text: str,
-        sentence_group: List[str],
-    ) -> tuple[str, List[str]]:
-        consumed_until = 0
-        for match in TTS_CLAUSE_CHUNKS.finditer(text):
-            fragment = match.group(0).strip()
-            if not fragment:
-                consumed_until = match.end()
-                continue
-            sentence_group.append(fragment)
-            consumed_until = match.end()
-            group_text = " ".join(sentence_group)
-            if (
-                len(sentence_group) >= max(1, int(self.args.tts_group_sentences))
-                and not has_unclosed_parenthetical(group_text)
-            ):
-                self._put_tts_text(tts_queue, group_text)
-                sentence_group = []
-        return text[consumed_until:], sentence_group
-
-    def _flush_tts_tail(
-        self,
-        tts_queue: "queue.Queue[str | None]",
-        sentence_buffer: str,
-        sentence_group: List[str],
-    ) -> None:
-        tail = sentence_buffer.strip()
-        if tail:
-            sentence_group.append(tail)
-        if sentence_group:
-            self._put_tts_text(tts_queue, " ".join(sentence_group))
-
-    def _put_tts_text(self, tts_queue: "queue.Queue[str | None]", text: str) -> None:
-        tts_text = sanitize_tts_text(text, getattr(self.args, "tts_silence_types", set()))
-        if tts_text and SPEAKABLE_TEXT.search(tts_text):
-            tts_queue.put(tts_text)
-
-    def _tts_worker(self, tts_queue: "queue.Queue[str | None]", cancel_event: threading.Event) -> None:
-        max_workers = max(1, int(self.args.tts_queue_ahead))
-        batch_no = 0
-        next_play_no = 1
-        closed = False
-        last_wait_log_ts = 0.0
-        futures: dict[int, Future[tuple[int, str, np.ndarray, int, int, float]]] = {}
-        with self.lock:
-            self.tts_cancel_event = cancel_event
-
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="omnivoice-synth") as executor:
-            while (not closed or futures) and not cancel_event.is_set():
-                while not closed and len(futures) < max_workers and not cancel_event.is_set():
-                    try:
-                        text = tts_queue.get(timeout=0.05)
-                    except queue.Empty:
-                        break
-                    if text is None:
-                        closed = True
-                        break
-                    batch_no += 1
-                    future = executor.submit(self._synth_tts_batch, batch_no, text)
-                    futures[batch_no] = future
-                    self._push_tts_log(
-                        f"#{batch_no} queued synth | converting={len(futures)} | "
-                        f"queued={tts_queue.qsize()} | group={self.args.tts_group_sentences} | "
-                        f"chars={len(text)}: {text[:80]}"
-                    )
-
-                next_future = futures.get(next_play_no)
-                if next_future is None:
-                    time.sleep(0.02)
-                    continue
-                if not next_future.done():
-                    now = time.monotonic()
-                    if now - last_wait_log_ts >= 0.5:
-                        last_wait_log_ts = now
-                        self._push_tts_log(
-                            f"waiting play #{next_play_no} | converting={len(futures)} | queued={tts_queue.qsize()}"
-                        )
-                    time.sleep(0.05)
-                    continue
-
-                futures.pop(next_play_no, None)
-                try:
-                    seq_no, text, samples, sample_rate, api_ms, audio_sec = next_future.result()
-                    self._push_tts_log(
-                        f"#{seq_no} ready api={api_ms}ms audio={audio_sec:.2f}s sr={sample_rate} | "
-                        f"converting={len(futures)} | queued={tts_queue.qsize()}"
-                    )
-                    if cancel_event.is_set():
-                        break
-                    play_started = time.monotonic()
-                    with self.lock:
-                        self.tts_playing = True
-                        self.prev_tts_chunk = self.current_tts_chunk
-                        self.current_tts_chunk = text
-                        self.tts_early_release_active = False
-                        self.interupt_switch_until_ts = 0.0
-                        self.active_voice_start_volume = max(float(self.args.voice_start_volume), self.interupt_volume)
-                        self.interupt_count = self.interupt_threshold
-                        self.interupt_qasr_parts = []
-                        self.interupt_qasr_text = ""
-                    self._push_log(
-                        f"[TTS] play start #{seq_no} interrupt_count={self.interupt_count}/{self.interupt_threshold} "
-                        f"interrupt_volume={self.interupt_volume:.4f}: {text[:80]}"
-                    )
-                    interrupted = self._play_audio_interruptible(samples, sample_rate, cancel_event)
-                    play_ms = int((time.monotonic() - play_started) * 1000.0)
-                    with self.lock:
-                        self.tts_playing = False
-                        self.tts_early_release_active = False
-                        if not interrupted:
-                            self.interupt_switch_until_ts = time.monotonic() + self.interupt_switch_delay
-                            self.active_voice_start_volume = max(float(self.args.voice_start_volume), self.interupt_volume)
-                            self.interupt_count = self.interupt_threshold
-                            self.interupt_qasr_parts = []
-                            self.interupt_qasr_text = ""
-                            switch_delay = self.interupt_switch_delay
-                    if interrupted:
-                        self._push_log(f"[TTS] interrupted #{seq_no} played_ms={play_ms}: {text[:80]}")
-                        break
-                    self._push_log(
-                        f"[TTS] played #{seq_no} played_ms={play_ms} "
-                        f"switch_delay={switch_delay:.2f}s: {text[:80]}"
-                    )
-                except Exception as exc:
-                    self._push_tts_log(f"#{next_play_no} error: {exc!r}")
-                next_play_no += 1
-        with self.lock:
-            if self.tts_cancel_event is cancel_event:
-                self.tts_cancel_event = None
-                self.tts_playing = False
-                self.tts_early_release_active = False
-
-    def _synth_tts_batch(self, seq_no: int, text: str) -> tuple[int, str, np.ndarray, int, int, float]:
-        lock = getattr(self.args, "tts_settings_lock", None)
-        if lock is not None:
-            with lock:
-                packet_prefix = self.args.tts_packet_prefix
-                packet_suffix = self.args.tts_packet_suffix
-        else:
-            packet_prefix = self.args.tts_packet_prefix
-            packet_suffix = self.args.tts_packet_suffix
-        api_text = f"{packet_prefix}{text}{packet_suffix}"
-        started = time.monotonic()
-        result = self.tts_client.call_tts_api(api_text)
-        api_ms = int((time.monotonic() - started) * 1000.0)
-        samples, sample_rate = wav_result_to_audio(result)
-        audio_sec = len(samples) / float(sample_rate)
-        return seq_no, api_text, samples, sample_rate, api_ms, audio_sec
-
-    def _play_audio_interruptible(
-        self,
-        samples: np.ndarray,
-        sample_rate: int,
-        cancel_event: threading.Event,
-    ) -> bool:
-        chunk_frames = max(1, int(sample_rate * 0.02))
-        offset = 0
-        interrupted = False
-        stream: sd.OutputStream | None = None
-        try:
-            stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype="float32")
-            stream.start()
-            while offset < len(samples):
-                if cancel_event.is_set():
-                    interrupted = True
-                    break
-                remaining_sec = (len(samples) - offset) / float(sample_rate)
-                if (
-                    self.interupt_early_release > 0
-                    and remaining_sec <= self.interupt_early_release
-                    and not self.tts_early_release_active
-                ):
-                    with self.lock:
-                        self.tts_early_release_active = True
-                        self.active_voice_start_volume = float(self.args.voice_start_volume)
-                    self._push_tts_log(f"early release active | remaining={remaining_sec:.2f}s")
-                chunk = samples[offset : offset + chunk_frames]
-                stream.write(chunk.reshape(-1, 1))
-                offset += len(chunk)
-        finally:
-            if stream is not None:
-                try:
-                    if interrupted or cancel_event.is_set():
-                        interrupted = True
-                        stream.abort()
-                    else:
-                        stream.stop()
-                finally:
-                    stream.close()
-        return interrupted or cancel_event.is_set()
-
-    def _push_tts_log(self, message: str) -> None:
-        self._push_log(f"[TTS] {message}")
-
-    def _push_tts_log_locked(self, message: str) -> None:
-        self._push_log_locked(f"[TTS] {message}")
 
     def _push_log(self, message: str) -> None:
         with self.lock:
@@ -1316,13 +963,6 @@ class MicEngine:
         timestamp = time.strftime("%H:%M:%S")
         self.tts_logs.append(f"{timestamp} {message}")
         self.tts_logs = self.tts_logs[-200:]
-
-    def _drain_tts_queue(self, tts_queue: "queue.Queue[str | None]") -> None:
-        while True:
-            try:
-                tts_queue.get_nowait()
-            except queue.Empty:
-                return
 
     def _push_error(self, message: str) -> None:
         with self.lock:
