@@ -2,7 +2,7 @@
 
 [English](README.en.md) | [Traditional Chinese](README.md)
 
-QasrGbxOmni is a local voice conversation workbench that connects microphone capture, ASR, LLM replies, OmniVoice TTS, a Flask Web UI, conversation memory, and an EPUB reader mode in one Python application.
+QasrGbxOmni is a local voice conversation and reading-machine workbench that connects microphone capture, ASR, LLM replies, OmniVoice TTS, a Flask Web UI, conversation memory, and an EPUB reader mode in one Python application.
 
 This version is closer to a local lab tool than a packaged product. You need to run the external ASR, LLM, and TTS services yourself, then point `config.yaml` and `ControlPrompt.yaml` at the correct endpoints and prompts.
 
@@ -17,7 +17,7 @@ This version is closer to a local lab tool than a packaged product. You need to 
 - Central prompt configuration in `ControlPrompt.yaml`, including persona, tool prompt, prompt injection threshold, raw history windows, memory counters, and EchoFilter.
 - LLM-based interrupt judge to decide whether ASR captured during TTS playback is a real interruption or echo/noise.
 - Router prompt support for post-turn control-code records.
-- BookReader / Reader Mode for uploading EPUB files, extracting XHTML chapters, analyzing book content, saving `AnalyzeResault` and `SummaryIndex`, and answering voice questions from book context only.
+- Reading Machine / BookReader / Reader Mode for uploading EPUB files, extracting XHTML chapters, analyzing book content, saving `AnalyzeResault` and `SummaryIndex`, and answering voice questions from book context only.
 - Built-in config editor for `config.yaml` and `ControlPrompt.yaml`.
 
 ## Project Layout
@@ -128,18 +128,20 @@ Press `Start mic` to begin microphone capture and `Stop` to stop. `MemReset` cle
 - `Voice Active Detection`: volume, audio cutting state, ASR queue, TTS interruption state, stutter delay, and long-silence countdown.
 - `LLM Reply`: user turns and assistant replies.
 - `Config`: edit `config.yaml` and `ControlPrompt.yaml` from the browser.
-- `BookReader`: upload EPUB files, inspect XHTML chapters, run analysis, and download BookReader text bundles.
+- `BookReader`: the reading-machine workspace for uploading EPUB files, inspecting XHTML chapters, running analysis, and downloading BookReader text bundles.
 - `OmniVoice Settings`: adjust runtime TTS parameters. Changes are posted back to the running app automatically.
 
-## BookReader / Reader Mode
+## Reading Machine / BookReader / Reader Mode
 
-BookReader currently starts from an EPUB file:
+The reading machine currently starts from an EPUB file. Its job is to split a book into analyzable chapters, then turn the analysis result into context for later voice Q&A:
 
 1. Upload a `.epub` file in the UI.
 2. The app extracts XHTML/HTML chapters and table-of-contents metadata.
 3. Select chapters to analyze, then generate or update `AnalyzeResault` and `SummaryIndex`.
 4. When Reader Mode is active, voice questions use the book analysis context and avoid normal conversation memory and router prompts.
 5. Downloading produces a `BookName-BookReader.txt` file that combines `SummaryIndex` and `AnalyzeResault`. Upload it together with the EPUB later to restore the reader workspace.
+
+Reading-machine prompts live in `ReaderConfig` inside `ControlPrompt.yaml`, including prompts for book loading, start reading, while reading, finish reading, and chapter analysis. Normal chat mode and reading-machine mode use different prompt-building paths so book Q&A does not accidentally mix with regular conversation memory.
 
 ## API Quick Reference
 
