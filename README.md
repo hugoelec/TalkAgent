@@ -1,5 +1,7 @@
 # QasrGbxOmni
 
+[English](README.en.md) | [繁體中文](README.md)
+
 QasrGbxOmni 是一個本機語音對話實驗工具，把麥克風收音、ASR、LLM 回覆、OmniVoice TTS、Web UI、對話記憶與 EPUB 讀書模式串在同一個 Python/Flask 應用裡。
 
 目前版本偏向「本機工作台」而不是打包好的產品：外部 ASR、LLM、TTS 服務需要自己先啟動，主要設定集中在 `config.yaml` 與 `ControlPrompt.yaml`。
