@@ -12,7 +12,7 @@
     p { margin: 4px 0 10px; }
     button { font-size: 16px; padding: 8px 14px; margin-right: 8px; border-radius: 10px; border: 0; cursor: pointer; }
     #start { background: #2c7; color: #001; }
-    #stop { background: #f66; color: #200; }
+    #start.micRunning { background: #f66; color: #200; }
     #memReset { background: #224b6b; color: #eaf7ff; }
     .topBar {
       display: flex;
@@ -351,6 +351,13 @@
 #bookSave:hover {
       background: #d97a1d;
     }
+    #speechBookUploadButton.readerLoaded {
+      background: #123f7a;
+      color: #eef6ff;
+    }
+    #speechBookUploadButton.readerLoaded:hover {
+      background: #18569f;
+    }
     #bookUploadInput {
       display: none;
     }
@@ -611,7 +618,6 @@
 <body>
   <div class="topBar">
     <button id="start">Start mic</button>
-    <button id="stop" disabled>Stop</button>
     <button id="memReset" type="button">MemReset</button>
     <div id="controlPromptControls">
       <span>current: <span id="controlPromptCurrent">0</span></span>
@@ -808,7 +814,6 @@ const ttsLogEl = document.getElementById('ttsLog');
 const readerRuntimeLogEl = document.getElementById('readerRuntimeLog');
 const logEl = document.getElementById('log');
 const startBtn = document.getElementById('start');
-const stopBtn = document.getElementById('stop');
 const memResetBtn = document.getElementById('memReset');
 const ttsSettingsStatusEl = document.getElementById('ttsSettingsStatus');
 const controlPromptStatusEl = document.getElementById('controlPromptStatus');
@@ -894,6 +899,9 @@ let readerContextSyncTimer = null;
 let xhtmlIndexItems = [];
 let readerRuntimeLogs = [];
 let readerAnalyzeRunning = false;
+let readerAnalyzeGeneration = 0;
+let speechBookButtonLoaded = false;
+let micRunning = false;
 let analyzerSendQueue = Promise.resolve();
 const browserAudioConstraints = (() => {
   try {
@@ -1236,7 +1244,12 @@ async function waitForTalkerPlaybackComplete(label = 'Talker', timeoutMs = 18000
     try {
       const res = await fetch('/state', { cache: 'no-store' });
       const data = await res.json();
-      const active = !!(data.llm_inflight || data.tts_playing);
+      const active = !!(
+        data.llm_inflight ||
+        data.tts_playing ||
+        data.speech_turn_active ||
+        Number(data.speech_turn_queue_size || 0) > 0
+      );
       if (active) {
         sawActive = true;
         idleCount = 0;
@@ -1318,43 +1331,61 @@ async function analyzeBookBatch() {
     setBookStatus('Analyze already running');
     return;
   }
+  const analyzeGeneration = readerAnalyzeGeneration;
+  const assertAnalyzeCurrent = (reason) => {
+    if (analyzeGeneration !== readerAnalyzeGeneration) {
+      throw new Error(`Analyze cancelled${reason ? `: ${reason}` : ''}`);
+    }
+  };
   readerAnalyzeRunning = true;
   if (readerAnalyzeButtonEl) readerAnalyzeButtonEl.disabled = true;
   updateReaderModeBadge(true, true);
   await syncReaderContextNow({ readingMode: true });
+  assertAnalyzeCurrent('workspace changed');
   const autoAnalyzeAll = !!(readerAutoAnalyzeAllEl && readerAutoAnalyzeAllEl.checked);
   let analyzedCount = 0;
   let startFrom = Math.max(1, Number(readerAnalyzeStartEl ? readerAnalyzeStartEl.value : 1) || 1);
   try {
     const batchConfig = await fetchAnalyzeConfig();
+    assertAnalyzeCurrent('workspace changed');
     const cptShortRest = Math.max(0, Number(batchConfig.CptShortRest || 0) || 0);
     const startText = readerEventTalkerText(bookWorkspaceName, batchConfig.StartReadingPrompt);
     if (startText) {
       await sendReaderEventAsrTurn(startText, 'StartReading');
+      assertAnalyzeCurrent('workspace changed');
     }
     while (true) {
+      assertAnalyzeCurrent('workspace changed');
       setBookStatus(autoAnalyzeAll ? `Analyze running ${startFrom}...` : 'Analyze running...');
       const result = await analyzeBookSection(startFrom);
+      assertAnalyzeCurrent('workspace changed');
       analyzedCount += 1;
       startFrom = result.nextStart;
       const onReadingText = readerEventTalkerText(result.title, batchConfig.onReadingPrompt);
       if (onReadingText) {
         setBookDocumentContent('now_chapter', result.summary || '');
         await syncReaderContextNow();
+        assertAnalyzeCurrent('workspace changed');
         await sendReaderEventAsrTurn(onReadingText, 'onReading', result.summary || '');
+        assertAnalyzeCurrent('workspace changed');
         setBookDocumentContent('now_chapter', '');
         await syncReaderContextNow();
+        assertAnalyzeCurrent('workspace changed');
       }
       if (!autoAnalyzeAll) break;
       if (startFrom > selectedXhtmlIds().length) {
+        assertAnalyzeCurrent('workspace changed');
         setBookStatus(`Analyze all completed ${analyzedCount}`);
         pushReaderLog(`[Analyze] all completed count=${analyzedCount}`);
         const finishText = readerEventTalkerText(bookWorkspaceName, batchConfig.FinishReadingPrompt);
         if (finishText) {
           await waitForTalkerPlaybackComplete('last onReading');
+          assertAnalyzeCurrent('workspace changed');
           pushReaderLog('[Analyze] FinishReading delay 2000ms after last playback');
           await sleepMs(2000);
+          assertAnalyzeCurrent('workspace changed');
           await sendReaderEventAsrTurn(finishText, 'FinishReading');
+          assertAnalyzeCurrent('workspace changed');
         }
         break;
       }
@@ -1370,14 +1401,20 @@ async function analyzeBookBatch() {
       } else {
         await sleepMs(0);
       }
+      assertAnalyzeCurrent('workspace changed');
     }
   } catch (e) {
-    setBookStatus(`Analyze error: ${e.message || e}`);
-    pushReaderLog(`[Error] Analyze: ${e.message || e}`);
+    if (String(e.message || e).startsWith('Analyze cancelled')) {
+      setBookStatus('Analyze cancelled');
+      pushReaderLog(`[Analyze] cancelled generation=${analyzeGeneration}->${readerAnalyzeGeneration}`);
+    } else {
+      setBookStatus(`Analyze error: ${e.message || e}`);
+      pushReaderLog(`[Error] Analyze: ${e.message || e}`);
+    }
   } finally {
     readerAnalyzeRunning = false;
     await syncReaderContextNow({ readingMode: false });
-    updateReaderModeBadge(true, false);
+    updateReaderModeBadge(analyzeGeneration === readerAnalyzeGeneration, false);
     if (readerAnalyzeButtonEl) readerAnalyzeButtonEl.disabled = false;
   }
 }
@@ -1715,7 +1752,16 @@ function setBookDocumentContent(fileId, content) {
   }
 }
 
+function updateSpeechBookUploadButton(loaded) {
+  speechBookButtonLoaded = !!loaded;
+  if (!speechBookUploadButtonEl) return;
+  speechBookUploadButtonEl.textContent = speechBookButtonLoaded ? 'UnLoad' : 'upBook';
+  speechBookUploadButtonEl.classList.toggle('readerLoaded', speechBookButtonLoaded);
+  speechBookUploadButtonEl.title = speechBookButtonLoaded ? 'Unload book' : 'Upload book';
+}
+
 function updateReaderModeBadge(enabled, readingMode = false) {
+  updateSpeechBookUploadButton(enabled);
   if (!readerModeBadgeEl) return;
   const isReadingMode = !!(enabled && readingMode);
   readerModeBadgeEl.textContent = isReadingMode ? 'ReadingMode' : enabled ? 'ReaderMode' : 'NormMode';
@@ -1914,6 +1960,8 @@ async function uploadBookFile(fileList) {
     return;
   }
   setBookStatus('uploading...');
+  readerAnalyzeGeneration += 1;
+  const uploadAnalyzeGeneration = readerAnalyzeGeneration;
   const form = new FormData();
   for (const file of files) {
     form.append('files', file, file.name);
@@ -1970,6 +2018,10 @@ async function uploadBookFile(fileList) {
     if (analyzeConfig && shouldAutoAnalyzeUpload) {
       pushReaderLog('[Analyze] auto start delay 3000ms from upload AutoAnalyze=true');
       await sleepMs(3000);
+      if (uploadAnalyzeGeneration !== readerAnalyzeGeneration) {
+        pushReaderLog(`[Analyze] auto start skipped generation=${uploadAnalyzeGeneration}->${readerAnalyzeGeneration}`);
+        return;
+      }
       await analyzeBookBatch();
     }
   } catch (e) {
@@ -2007,6 +2059,8 @@ async function saveBookFile() {
 
 async function unloadBookWorkspace() {
   setBookStatus('unloading...');
+  readerAnalyzeGeneration += 1;
+  if (readerAutoAnalyzeAllEl) readerAutoAnalyzeAllEl.checked = false;
   try {
     await postJson('/book-reader/unload');
   } catch (e) {
@@ -2047,7 +2101,13 @@ if (bookUploadButtonEl && bookUploadInputEl) {
   });
 }
 if (speechBookUploadButtonEl && bookUploadInputEl) {
-  speechBookUploadButtonEl.addEventListener('click', () => bookUploadInputEl.click());
+  speechBookUploadButtonEl.addEventListener('click', () => {
+    if (speechBookButtonLoaded) {
+      unloadBookWorkspace();
+      return;
+    }
+    bookUploadInputEl.click();
+  });
 }
 if (bookUnloadButtonEl) {
   bookUnloadButtonEl.addEventListener('click', unloadBookWorkspace);
@@ -2294,6 +2354,14 @@ function browserAudioConstraintLine() {
   );
 }
 
+function updateMicButton(running, pending = false) {
+  micRunning = !!running;
+  if (!startBtn) return;
+  startBtn.textContent = pending ? (micRunning ? 'Stopping...' : 'Starting...') : (micRunning ? 'Stop' : 'Start mic');
+  startBtn.classList.toggle('micRunning', micRunning);
+  startBtn.disabled = !!pending;
+}
+
 async function pollState() {
   if (pollInFlight) return;
   pollInFlight = true;
@@ -2317,7 +2385,7 @@ async function pollState() {
     const counterLines = [
       browserAecLine(data),
       browserAudioConstraintLine(),
-      `interupt_count: ${data.interupt_count ?? 0} | tts_playing=${data.tts_playing ? 'yes' : 'no'} | mode=${data.interupt_mode ? 'yes' : 'no'} | asr: inflight=${data.asr_inflight ? 'yes' : 'no'} | queue=${data.asr_queue_size ?? 0} | last=${data.last_asr_duration_ms ?? 0}ms`,
+      `interupt_count: ${data.interupt_count ?? 0} | tts_playing=${data.tts_playing ? 'yes' : 'no'} | speech: active=${data.speech_turn_active ? 'yes' : 'no'} queue=${data.speech_turn_queue_size ?? 0} | mode=${data.interupt_mode ? 'yes' : 'no'} | asr: inflight=${data.asr_inflight ? 'yes' : 'no'} | queue=${data.asr_queue_size ?? 0} | last=${data.last_asr_duration_ms ?? 0}ms`,
       `interupt_volume: ${Number(data.interupt_last_volume || 0).toFixed(4)}  voice_gate: ${Number(data.active_voice_start_volume || 0).toFixed(4)} | early=${data.tts_early_release_active ? 'yes' : 'no'} | switch_left=${Number(data.interupt_switch_remaining || 0).toFixed(2)}s`,
       `interrupt_langs: ${(data.interrupt_languages || []).join(', ') || 'all'}`,
       `interupt qasr: ${data.interupt_qasr_text || ''}`,
@@ -2383,8 +2451,7 @@ async function pollState() {
     }
 
     const running = !!data.running;
-    startBtn.disabled = running;
-    stopBtn.disabled = !running;
+    updateMicButton(running);
   } catch (e) {
     setBookStatus('poll error');
   } finally {
@@ -2393,24 +2460,22 @@ async function pollState() {
   }
 }
 
-startBtn.onclick = async () => {
-  try {
-    const data = await postJson('/start');
-    if (data.error) {
-      setBookStatus('start error');
+if (startBtn) {
+  startBtn.onclick = async () => {
+    const targetRunning = !micRunning;
+    updateMicButton(micRunning, true);
+    try {
+      const data = await postJson(targetRunning ? '/start' : '/stop');
+      if (data.error) {
+        setBookStatus(targetRunning ? 'start error' : 'stop error');
+      }
+      updateMicButton(!!data.running);
+    } catch (e) {
+      setBookStatus(targetRunning ? 'start error' : 'stop error');
+      updateMicButton(micRunning);
     }
-  } catch (e) {
-    setBookStatus('start error');
-  }
-};
-
-stopBtn.onclick = async () => {
-  try {
-    await postJson('/stop');
-  } catch (e) {
-    setBookStatus('stop error');
-  }
-};
+  };
+}
 
 if (memResetBtn) {
   memResetBtn.onclick = async () => {

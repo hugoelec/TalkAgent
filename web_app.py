@@ -929,6 +929,7 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
     @app.post("/book-reader/unload")
     def unload_book_reader_workspace() -> Dict[str, Any]:
         nonlocal current_epub_items
+        dropped_turns = engine.cancel_speech_turns("reader unload")
         book_reader_files.clear()
         current_epub_items = []
         with engine.lock:
@@ -937,7 +938,7 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             engine.reader_analyze_resault = ""
             engine.reader_summary_index = ""
             engine.reader_now_chapter = ""
-        return {"ok": True, "files": []}
+        return {"ok": True, "files": [], "dropped_speech_turns": dropped_turns}
 
     @app.post("/book-reader/xhtml-content")
     def get_xhtml_content() -> Response:
