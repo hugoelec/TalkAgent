@@ -1946,6 +1946,10 @@ async function uploadBookFile(fileList) {
     currentBookFileId = data.files && data.files.some((item) => item.id === 'analyze_resault') ? 'analyze_resault' : '';
     await initBookFiles(data.files || [], bookWorkspaceSaved);
     const analyzeConfig = await applyAnalyzeConfigControls('upload');
+    if (data.loaded_analyze_resault && readerAutoAnalyzeUploadEl) {
+      readerAutoAnalyzeUploadEl.checked = false;
+      pushReaderLog('[Analyze] auto disabled because uploaded bundle already has AnalyzeResault');
+    }
     const loadedParts = [];
     if (data.loaded_analyze_resault) loadedParts.push('AnalyzeResault');
     if (data.loaded_summary_index) loadedParts.push('SummaryIndex');
@@ -1962,7 +1966,8 @@ async function uploadBookFile(fileList) {
       await appendAnalyzerOnLoadingPrompt(data.on_loading_prompt);
       await syncReaderContextNow();
     }
-    if (analyzeConfig && analyzeConfig.AutoAnalyze) {
+    const shouldAutoAnalyzeUpload = !!(readerAutoAnalyzeUploadEl && readerAutoAnalyzeUploadEl.checked);
+    if (analyzeConfig && shouldAutoAnalyzeUpload) {
       pushReaderLog('[Analyze] auto start delay 3000ms from upload AutoAnalyze=true');
       await sleepMs(3000);
       await analyzeBookBatch();
@@ -2029,6 +2034,7 @@ async function unloadBookWorkspace() {
     xhtmlIndexPanelEl.style.display = 'none';
   }
   resetReaderAnalyzeStart('unload');
+  await applyAnalyzeConfigControls('unload');
   setBookStatus('unloaded');
   pushReaderLog('[Unload] reader workspace cleared');
 }
