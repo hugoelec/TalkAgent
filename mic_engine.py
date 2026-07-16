@@ -82,8 +82,15 @@ class MicEngine:
         self.lock = threading.Lock()
         self.shutdown_event = threading.Event()
         self.segment_queue: "queue.Queue[tuple[np.ndarray, bool] | None]" = queue.Queue()
+        self.speech_turn_queue: "queue.Queue[Dict[str, Any] | None]" = queue.Queue()
+        self.speech_turn_active = False
         self.sender_thread = threading.Thread(target=self._sender_loop, name="asr-sender", daemon=True)
         self.turn_thread = threading.Thread(target=self._turn_loop, name="long-silence-turn", daemon=True)
+        self.speech_turn_thread = threading.Thread(
+            target=self._speech_turn_loop,
+            name="speech-turn-worker",
+            daemon=True,
+        )
 
         self.stream: sd.InputStream | None = None
         self.running = False
@@ -156,6 +163,7 @@ class MicEngine:
         self.block_size = max(1, int(round(self.args.sample_rate * self.args.block_ms / 1000.0)))
         self.sender_thread.start()
         self.turn_thread.start()
+        self.speech_turn_thread.start()
 
     def start(self) -> None:
         with self.lock:
@@ -255,6 +263,8 @@ class MicEngine:
                 "asr_inflight": self.asr_inflight,
                 "llm_inflight": self.llm_inflight,
                 "asr_queue_size": self.segment_queue.qsize(),
+                "speech_turn_active": self.speech_turn_active,
+                "speech_turn_queue_size": self.speech_turn_queue.qsize(),
                 "tts_playing": self.tts_playing,
                 "interupt_mode": self._interupt_mode_active_locked(now),
                 "interupt_threshold": self.interupt_threshold,
@@ -281,8 +291,10 @@ class MicEngine:
         self.stop()
         self.shutdown_event.set()
         self.segment_queue.put(None)
+        self.speech_turn_queue.put(None)
         self.sender_thread.join(timeout=1.0)
         self.turn_thread.join(timeout=1.0)
+        self.speech_turn_thread.join(timeout=1.0)
 
     def _audio_callback(self, indata: np.ndarray, frames: int, callback_time: Any, status: sd.CallbackFlags) -> None:
         del callback_time
@@ -522,6 +534,79 @@ class MicEngine:
                     )
                     self._trigger_turn_from_long_silence_locked()
 
+    def _queue_speech_turn(
+        self,
+        user_text: str,
+        reply_index: int,
+        source: str,
+        **kwargs: Any,
+    ) -> None:
+        self.speech_turn_queue.put(
+            {
+                "user_text": user_text,
+                "reply_index": reply_index,
+                "source": source,
+                "kwargs": kwargs,
+            }
+        )
+
+    def _drain_pending_speech_turns(self, skipped_message: str = "[Skipped by interrupt]") -> int:
+        dropped = 0
+        while True:
+            try:
+                turn = self.speech_turn_queue.get_nowait()
+            except queue.Empty:
+                return dropped
+            if turn is None:
+                self.speech_turn_queue.put(None)
+                return dropped
+            if isinstance(turn, dict):
+                reply_index = turn.get("reply_index")
+                if isinstance(reply_index, int) and 0 <= reply_index < len(self.reply_results):
+                    if not str(self.reply_results[reply_index].get("text", "") or "").strip():
+                        self.reply_results[reply_index]["text"] = skipped_message
+            dropped += 1
+
+    def cancel_speech_turns(self, reason: str = "cancelled") -> int:
+        with self.lock:
+            if self.current_llm_cancel_event is not None:
+                self.current_llm_cancel_event.set()
+            if self.tts_cancel_event is not None:
+                self.tts_cancel_event.set()
+            dropped_turns = self._drain_pending_speech_turns(f"[Skipped by {reason}]")
+            self._push_log_locked(
+                f"[SpeechTurn] cancel reason={reason} dropped_queued_turns={dropped_turns}"
+            )
+            return dropped_turns
+
+    def _speech_turn_loop(self) -> None:
+        while not self.shutdown_event.is_set():
+            try:
+                turn = self.speech_turn_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if turn is None:
+                break
+            user_text = str(turn.get("user_text", "") or "")
+            reply_index = int(turn.get("reply_index", -1))
+            source = str(turn.get("source", "SpeechTurn") or "SpeechTurn")
+            kwargs = turn.get("kwargs")
+            if not isinstance(kwargs, dict):
+                kwargs = {}
+            with self.lock:
+                self.speech_turn_active = True
+                self._push_log_locked(
+                    f"[{source}] dequeue LLM turn chars={len(user_text)} "
+                    f"remaining={self.speech_turn_queue.qsize()}"
+                )
+            try:
+                self._llm_stream_reply(user_text, reply_index, **kwargs)
+            except Exception as exc:
+                self._push_error(f"speech turn error: {exc!r}")
+            finally:
+                with self.lock:
+                    self.speech_turn_active = False
+
     def _refresh_long_silence_locked(self) -> None:
         current_asr_text = build_stutter_text(self.transcript)
         self.long_silence_ms = int(float(self.args.long_silence_ms))
@@ -583,12 +668,11 @@ class MicEngine:
         self.stuttering_count = 0
         self.char_stutter_count = 0
         self.token_stutter_count = 0
-        threading.Thread(
-            target=self._llm_stream_reply,
-            args=(triggered_asr_text, reply_index),
-            name="llm-stream",
-            daemon=True,
-        ).start()
+        self._queue_speech_turn(triggered_asr_text, reply_index, "ASR")
+        self._push_log_locked(
+            f"[ASR] queued LLM turn chars={len(triggered_asr_text)} "
+            f"queued={self.speech_turn_queue.qsize()}"
+        )
 
     def _consume_interupt_qasr_locked(
         self,
@@ -630,9 +714,10 @@ class MicEngine:
             self.current_llm_cancel_event.set()
         if self.tts_cancel_event is not None:
             self.tts_cancel_event.set()
+        dropped_turns = self._drain_pending_speech_turns()
         self._push_log_locked(
             f"[Interrupt] trigger stop requested: {self.interupt_qasr_text[:120]} "
-            f"stop_at={self.llm_pending_stop_at[:120]}"
+            f"stop_at={self.llm_pending_stop_at[:120]} dropped_queued_turns={dropped_turns}"
         )
 
         interupt_text = self.interupt_qasr_text.strip()
@@ -652,19 +737,17 @@ class MicEngine:
     def _start_interupt_turn(self, interupt_text: str) -> None:
         sd.stop()
         with self.lock:
-            self._push_log_locked(f"[Interrupt] start LLM turn chars={len(interupt_text)}")
+            self._push_log_locked(f"[Interrupt] queue LLM turn chars={len(interupt_text)}")
             self.tts_playing = False
             self.reply_results.append({"role": "user", "text": interupt_text})
             self.reply_results.append({"role": "assistant", "text": ""})
             self.reply_results = self.reply_results[-400:]
             reply_index = len(self.reply_results) - 1
-        threading.Thread(
-            target=self._llm_stream_reply,
-            args=(interupt_text, reply_index),
-            kwargs={"enable_router": False},
-            name="llm-interupt-stream",
-            daemon=True,
-        ).start()
+            self._queue_speech_turn(interupt_text, reply_index, "Interrupt", enable_router=False)
+            self._push_log_locked(
+                f"[Interrupt] queued LLM turn chars={len(interupt_text)} "
+                f"queued={self.speech_turn_queue.qsize()}"
+            )
 
     def start_manual_llm_turn(self, prompt: str) -> None:
         user_text = str(prompt or "").strip()
@@ -689,7 +772,7 @@ class MicEngine:
         if not user_text:
             raise ValueError("empty ASR text")
         with self.lock:
-            self._push_log_locked(f"[{source}] start LLM turn chars={len(user_text)}")
+            self._push_log_locked(f"[{source}] queue LLM turn chars={len(user_text)}")
             self.reply_results.append({"role": "user", "text": user_text})
             self.reply_results.append({"role": "assistant", "text": ""})
             self.reply_results = self.reply_results[-400:]
@@ -702,16 +785,17 @@ class MicEngine:
             self.stuttering_count = 0
             self.char_stutter_count = 0
             self.token_stutter_count = 0
-        threading.Thread(
-            target=self._llm_stream_reply,
-            args=(user_text, reply_index),
-            kwargs={
-                "reader_context_override": str(reader_context_override or ""),
-                "reader_context_override_source": source,
-            },
-            name=f"llm-{source.lower()}-stream",
-            daemon=True,
-        ).start()
+            self._queue_speech_turn(
+                user_text,
+                reply_index,
+                source,
+                reader_context_override=str(reader_context_override or ""),
+                reader_context_override_source=source,
+            )
+            self._push_log_locked(
+                f"[{source}] queued LLM turn chars={len(user_text)} "
+                f"queued={self.speech_turn_queue.qsize()}"
+            )
 
     def _start_section_id_turn(self) -> None:
         prompt = "你好，你的 session ID 是多少？"
@@ -744,8 +828,10 @@ class MicEngine:
         tts_queue: "queue.Queue[str | None]" = queue.Queue(maxsize=max(1, int(self.args.tts_queue_ahead)))
         cancel_event = threading.Event()
         tts_enabled = bool(self.args.tts_enabled) if enable_tts is None else bool(enable_tts)
+        track_current_turn = tts_enabled
+        tts_thread: threading.Thread | None = None
         if tts_enabled:
-            self.tts_pipeline.start_worker(tts_queue, cancel_event)
+            tts_thread = self.tts_pipeline.start_worker(tts_queue, cancel_event)
         sentence_buffer = ""
         sentence_group: List[str] = []
         reset_generation = 0
@@ -753,9 +839,10 @@ class MicEngine:
             with self.lock:
                 reset_generation = self.memory.reset_generation
                 self.llm_inflight = True
-                self.current_llm_cancel_event = cancel_event
-                self.current_llm_user_text = user_text
-                self.current_llm_reply_index = reply_index
+                if track_current_turn:
+                    self.current_llm_cancel_event = cancel_event
+                    self.current_llm_user_text = user_text
+                    self.current_llm_reply_index = reply_index
                 reader_mode = bool(self.reader_mode)
                 reader_context = str(self.reader_analyze_resault or "")
                 reader_summary_index = str(self.reader_summary_index or "")
@@ -813,10 +900,6 @@ class MicEngine:
                         self._push_log_locked(f"[SectionID] reply via LLM turn: {response_text[:240]}")
                     should_route = bool(prompt_result.router_allowed and not interrupted)
                 self.llm_inflight = False
-                if self.current_llm_cancel_event is cancel_event:
-                    self.current_llm_cancel_event = None
-                    self.current_llm_user_text = ""
-                    self.current_llm_reply_index = None
                 if section_id_turn:
                     self.report_section_id_inflight = False
                     self.report_section_id_done = True
@@ -833,10 +916,6 @@ class MicEngine:
                 if history_still_current and reply_index < len(self.reply_results):
                     self.reply_results[reply_index]["text"] += f"[LLM error: {exc!r}]"
                 self.llm_inflight = False
-                if self.current_llm_cancel_event is cancel_event:
-                    self.current_llm_cancel_event = None
-                    self.current_llm_user_text = ""
-                    self.current_llm_reply_index = None
                 if history_still_current:
                     self.errors.append(f"llm error: {exc!r}")
                     self.errors = self.errors[-100:]
@@ -850,6 +929,13 @@ class MicEngine:
                 if cancel_event.is_set():
                     self.tts_pipeline.drain_queue(tts_queue)
                 tts_queue.put(None)
+                if tts_thread is not None:
+                    tts_thread.join()
+            with self.lock:
+                if track_current_turn and self.current_llm_cancel_event is cancel_event:
+                    self.current_llm_cancel_event = None
+                    self.current_llm_user_text = ""
+                    self.current_llm_reply_index = None
 
     def _read_router_prompt(self) -> str:
         try:
