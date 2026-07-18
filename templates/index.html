@@ -903,6 +903,9 @@ let readerAnalyzeGeneration = 0;
 let speechBookButtonLoaded = false;
 let micRunning = false;
 let analyzerSendQueue = Promise.resolve();
+const ANALYZE_RESAULT_FILE_ID = 'analyze_resault';
+let analyzeResultAutoFollow = true;
+let suppressAnalyzeResultAutoFollowUpdate = false;
 const browserAudioConstraints = (() => {
   try {
     const supported = navigator.mediaDevices?.getSupportedConstraints?.() || {};
@@ -1013,6 +1016,88 @@ function setLogTab(tabName) {
   }
   if (ttsLogEl) ttsLogEl.style.display = tabName === 'voice' ? 'block' : 'none';
   if (readerRuntimeLogEl) readerRuntimeLogEl.style.display = tabName === 'reader' ? 'block' : 'none';
+}
+
+function isAnalyzeResultFile(fileId) {
+  return fileId === ANALYZE_RESAULT_FILE_ID;
+}
+
+function isAnalyzeResultActive() {
+  return currentBookFileId === ANALYZE_RESAULT_FILE_ID;
+}
+
+function isMonacoEditorNearBottom(editor) {
+  if (!editor) return true;
+  const layoutHeight = editor.getLayoutInfo ? editor.getLayoutInfo().height : 0;
+  const scrollTop = editor.getScrollTop ? editor.getScrollTop() : 0;
+  const scrollHeight = editor.getScrollHeight ? editor.getScrollHeight() : 0;
+  return scrollTop + layoutHeight >= scrollHeight - 24;
+}
+
+function isTextareaNearBottom(textarea) {
+  if (!textarea) return true;
+  return textarea.scrollTop + textarea.clientHeight >= textarea.scrollHeight - 24;
+}
+
+function setAnalyzeResultAutoFollow(enabled, reason) {
+  const nextState = !!enabled;
+  if (nextState === analyzeResultAutoFollow) return;
+  analyzeResultAutoFollow = nextState;
+  pushReaderLog(`[AnalyzeScroll] auto-lock ${nextState ? 'enabled' : 'disabled'}${reason ? ` reason=${reason}` : ''}`);
+}
+
+function updateAnalyzeResultAutoFollowFromView() {
+  if (suppressAnalyzeResultAutoFollowUpdate || !isAnalyzeResultActive()) return;
+  let nearBottom = analyzeResultAutoFollow;
+  if (bookMonacoEditor && bookMonacoEditor.getModel()) {
+    nearBottom = isMonacoEditorNearBottom(bookMonacoEditor);
+  } else if (bookFallbackEl && bookFallbackEl.style.display !== 'none') {
+    nearBottom = isTextareaNearBottom(bookFallbackEl);
+  }
+  setAnalyzeResultAutoFollow(nearBottom, nearBottom ? 'bottom' : 'scrolled-up');
+}
+
+function revealAnalyzeResultEndIfLocked() {
+  if (!analyzeResultAutoFollow || !isAnalyzeResultActive()) return;
+  if (bookMonacoEditor && bookMonacoEditor.getModel()) {
+    const model = bookMonacoEditor.getModel();
+    const lineCount = model.getLineCount();
+    const column = model.getLineMaxColumn(lineCount);
+    suppressAnalyzeResultAutoFollowUpdate = true;
+    try {
+      bookMonacoEditor.revealPosition({ lineNumber: lineCount, column });
+    } finally {
+      suppressAnalyzeResultAutoFollowUpdate = false;
+    }
+  } else if (bookFallbackEl && bookFallbackEl.style.display !== 'none') {
+    suppressAnalyzeResultAutoFollowUpdate = true;
+    try {
+      bookFallbackEl.scrollTop = bookFallbackEl.scrollHeight;
+    } finally {
+      suppressAnalyzeResultAutoFollowUpdate = false;
+    }
+  }
+}
+
+function withAnalyzeResultScrollPreservedIfUnlocked(callback) {
+  if (!isAnalyzeResultActive()) {
+    callback();
+    return;
+  }
+  const shouldPreserveScroll = !analyzeResultAutoFollow;
+  const monacoScrollTop = shouldPreserveScroll && bookMonacoEditor && bookMonacoEditor.getModel() ? bookMonacoEditor.getScrollTop() : null;
+  const fallbackScrollTop = shouldPreserveScroll && bookFallbackEl ? bookFallbackEl.scrollTop : null;
+  suppressAnalyzeResultAutoFollowUpdate = true;
+  try {
+    callback();
+    if (shouldPreserveScroll && monacoScrollTop !== null && bookMonacoEditor) {
+      bookMonacoEditor.setScrollTop(monacoScrollTop);
+    } else if (shouldPreserveScroll && fallbackScrollTop !== null && bookFallbackEl) {
+      bookFallbackEl.scrollTop = fallbackScrollTop;
+    }
+  } finally {
+    suppressAnalyzeResultAutoFollowUpdate = false;
+  }
 }
 
 function appendAnalyzerReply(text) {
@@ -1293,14 +1378,6 @@ async function analyzeBookSection(startFrom) {
   await openBookFile('analyze_resault');
   const replyText = await streamReaderLlmPrompt(prompt, (_delta, currentText) => {
     setBookDocumentContent('analyze_resault', `${prefix}${currentText}`);
-    if (bookMonacoEditor && currentBookFileId === 'analyze_resault') {
-      const model = bookMonacoEditor.getModel();
-      if (model) {
-        const lineCount = model.getLineCount();
-        const column = model.getLineMaxColumn(lineCount);
-        bookMonacoEditor.revealPosition({ lineNumber: lineCount, column });
-      }
-    }
   });
   if (!replyText) throw new Error('empty analyze reply');
   const outputText = replyText.trim();
@@ -1568,6 +1645,9 @@ function initMonaco() {
           nonBasicASCII: false,
         },
       });
+      bookMonacoEditor.onDidScrollChange((event) => {
+        if (event.scrollTopChanged) updateAnalyzeResultAutoFollowFromView();
+      });
       if (currentBookFileId && bookContents[currentBookFileId] !== undefined) {
         const bookFile = bookFiles.find((item) => item.id === currentBookFileId);
         setBookValue(currentBookFileId, bookContents[currentBookFileId], bookFile ? bookFile.language : 'plaintext', true);
@@ -1738,17 +1818,23 @@ function setBookDocumentContent(fileId, content) {
   const text = String(content || '');
   bookContents[fileId] = text;
   bookDirty[fileId] = true;
-  if (bookModels[fileId]) {
-    suppressEditorDirty = true;
-    bookModels[fileId].setValue(text);
-    suppressEditorDirty = false;
-  }
-  if (currentBookFileId === fileId) {
-    const file = bookFiles.find((item) => item.id === fileId);
-    setBookValue(fileId, text, file ? file.language : 'plaintext', true);
-  }
-  if (fileId === 'analyze_resault') {
+  const updateVisibleDocument = () => {
+    if (bookModels[fileId]) {
+      suppressEditorDirty = true;
+      bookModels[fileId].setValue(text);
+      suppressEditorDirty = false;
+    }
+    if (currentBookFileId === fileId) {
+      const file = bookFiles.find((item) => item.id === fileId);
+      setBookValue(fileId, text, file ? file.language : 'plaintext', true);
+    }
+  };
+  if (isAnalyzeResultFile(fileId)) {
+    withAnalyzeResultScrollPreservedIfUnlocked(updateVisibleDocument);
+    revealAnalyzeResultEndIfLocked();
     scheduleReaderContextSync();
+  } else {
+    updateVisibleDocument();
   }
 }
 
@@ -2122,6 +2208,9 @@ if (analyzerChatInputEl) {
       sendAnalyzerPrompt();
     }
   });
+}
+if (bookFallbackEl) {
+  bookFallbackEl.addEventListener('scroll', updateAnalyzeResultAutoFollowFromView);
 }
 if (speechLlmChatSendButtonEl) {
   speechLlmChatSendButtonEl.addEventListener('click', sendSpeechLlmPrompt);
