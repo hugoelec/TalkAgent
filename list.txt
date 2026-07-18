@@ -33,3 +33,10 @@ py -3.10 -m venv .venv
 .venv\Scripts\activate
 
 python QasrListener.py 
+
+
++++++++++++++++++++++++++++++++++++++++++
+git status -sb
+git add 要推的檔案
+git commit -m "這次改了什麼"
+git push
