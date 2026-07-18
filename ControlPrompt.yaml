@@ -37,7 +37,7 @@ ReaderConfig:
       Prompt: "[簡單描述故事]"
 
     FinishReading:
-      Prompt: "[回報分析完畢]"
+      Prompt: "[已經分析完畢]"
 
     Analyze:
       CptShortRest: 600ms
