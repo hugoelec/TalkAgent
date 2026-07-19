@@ -31,19 +31,24 @@ EchoFilter:
 ReaderConfig:
     onLoading:
       Prompt: "[知道這本書嗎?如果沒有請明說]"
+      temperature: 0.0
     StartReading:
       Prompt: "[用不同的語氣說開始分析]"
+      temperature: 0.8
     onReading:
       Prompt: "[簡單描述故事]"
+      temperature: 0.7
 
     FinishReading:
       Prompt: "[已經分析完畢]"
+      temperature: 0.4
 
     Analyze:
       CptShortRest: 600ms
       AnalyzeAll: true
       AutoAnalyze: true
       AnalyzePrompt: "請分析以下章節內容，列表整理人事時地物的重點，盡可能詳細。"
+      temperature: 0.2
       ResaultPromptOn: false
       ResaultPrompt: "送出所有的概要 交叉分析"
 

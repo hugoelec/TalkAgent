@@ -40,3 +40,9 @@ git status -sb
 git add 要推的檔案
 git commit -m "這次改了什麼"
 git push
+
+
+git status -sb
+git add -A
+git commit -m "AnalyzeAutoFollowSwitch"
+git push
