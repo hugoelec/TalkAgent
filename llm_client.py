@@ -34,6 +34,10 @@ class LLMClient:
     def __init__(self, args: Any):
         self.args = args
 
+    def resolve_temperature(self, temperature: float | None = None) -> float:
+        value = self.args.llm_temperature if temperature is None else temperature
+        return float(value)
+
     def build_messages(self, user_text: str, history: Iterable[dict[str, str]] | None = None) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
         if self.args.llm_disable_thinking:
@@ -57,22 +61,32 @@ class LLMClient:
         messages.append({"role": "user", "content": user_text})
         return messages
 
-    def build_payload(self, messages: list[dict[str, str]], stream: bool) -> dict[str, Any]:
+    def build_payload(
+        self,
+        messages: list[dict[str, str]],
+        stream: bool,
+        temperature: float | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.args.llm_model,
             "messages": messages,
-            "temperature": float(self.args.llm_temperature),
             "max_tokens": int(self.args.llm_max_tokens),
             "stream": stream,
         }
         extra_body = getattr(self.args, "llm_extra_body", None)
         if isinstance(extra_body, dict):
             payload.update(extra_body)
+        payload["temperature"] = self.resolve_temperature(temperature)
         return payload
 
-    def stream_reply(self, user_text: str, history: Iterable[dict[str, str]] | None = None):
+    def stream_reply(
+        self,
+        user_text: str,
+        history: Iterable[dict[str, str]] | None = None,
+        temperature: float | None = None,
+    ):
         messages = self.build_messages(user_text, history=history)
-        payload = self.build_payload(messages, stream=bool(self.args.llm_stream))
+        payload = self.build_payload(messages, stream=bool(self.args.llm_stream), temperature=temperature)
         url = join_url(self.args.llm_base_url, self.args.llm_endpoint)
 
         if not bool(self.args.llm_stream):

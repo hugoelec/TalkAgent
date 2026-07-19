@@ -279,8 +279,7 @@
     #memoryOut,
     #historyOut,
     #controlPromptHistoryOut,
-    #readerControlHistoryOut,
-    #routerHistoryOut {
+    #readerControlHistoryOut {
       flex: 1;
       min-height: 0;
       height: auto;
@@ -725,10 +724,10 @@
             <button class="replySubTab" type="button" data-reply-sub-tab="memory">memory</button>
             <button class="replySubTab" type="button" data-reply-sub-tab="history">history</button>
             <button class="replySubTab" type="button" data-reply-sub-tab="controlPromptHistory">ctrl pmpt hist</button>
-            <button class="replySubTab" type="button" data-reply-sub-tab="routerHistory">RouterHist</button>
             <button class="replySubTab" type="button" data-reply-sub-tab="readerControlHistory">ReadCtrlHist</button>
           </div>
           <div class="replySubActions">
+            <label class="replyMemoryLabel">temp:<input id="speechLlmTemperature" class="replyMemoryInput" type="number" min="0" max="2" step="0.1" value="{{ llm_temperature }}"></label>
             <label class="replyMemoryLabel">history#:<input id="rawHistoryRounds" class="replyMemoryInput" type="number" min="0" step="1" value="{{ raw_history_rounds }}"></label>
             <label class="replyMemoryLabel">Recent#:<input id="rawRecentRounds" class="replyMemoryInput" type="number" min="0" step="1" value="{{ raw_recent_rounds }}"></label>
             <label class="replyMemoryLabel">Freq:<input id="memoryExtractFreq" class="replyMemoryInput" type="number" min="0" step="1" value="{{ memory_extract_freq }}"></label>
@@ -751,9 +750,6 @@
         </div>
         <div id="controlPromptHistoryPane" class="replySubPane">
           <div id="controlPromptHistoryOut" class="box panel"></div>
-        </div>
-        <div id="routerHistoryPane" class="replySubPane">
-          <div id="routerHistoryOut" class="box panel"></div>
         </div>
         <div id="readerControlHistoryPane" class="replySubPane">
           <div id="readerControlHistoryOut" class="box panel"></div>
@@ -831,12 +827,12 @@ const talkPaneEl = document.getElementById('talkPane');
 const memoryPaneEl = document.getElementById('memoryPane');
 const historyPaneEl = document.getElementById('historyPane');
 const controlPromptHistoryPaneEl = document.getElementById('controlPromptHistoryPane');
-const routerHistoryPaneEl = document.getElementById('routerHistoryPane');
 const readerControlHistoryPaneEl = document.getElementById('readerControlHistoryPane');
 const configPaneEl = document.getElementById('configPane');
 const bookReaderPaneEl = document.getElementById('bookReaderPane');
 const speechLlmChatInputEl = document.getElementById('speechLlmChatInput');
 const speechLlmChatSendButtonEl = document.getElementById('speechLlmChatSendButton');
+const speechLlmTemperatureEl = document.getElementById('speechLlmTemperature');
 const speechBookUploadButtonEl = document.getElementById('speechBookUploadButton');
 const rawRecentRoundsEl = document.getElementById('rawRecentRounds');
 const rawHistoryRoundsEl = document.getElementById('rawHistoryRounds');
@@ -845,7 +841,6 @@ const memoryExtractRoundsEl = document.getElementById('memoryExtractRounds');
 const memoryOutEl = document.getElementById('memoryOut');
 const historyOutEl = document.getElementById('historyOut');
 const controlPromptHistoryOutEl = document.getElementById('controlPromptHistoryOut');
-const routerHistoryOutEl = document.getElementById('routerHistoryOut');
 const readerControlHistoryOutEl = document.getElementById('readerControlHistoryOut');
 const editorFileTabsEl = document.getElementById('editorFileTabs');
 const editorSaveEl = document.getElementById('editorSave');
@@ -874,7 +869,6 @@ let lastCounterKey = '';
 let lastReplyKey = '';
 let lastHistoryKey = '';
 let lastControlPromptHistoryKey = '';
-let lastRouterHistoryKey = '';
 let lastReaderControlHistoryKey = '';
 let lastTtsKey = '';
 let lastErrorKey = '';
@@ -988,7 +982,6 @@ function setReplySubTab(tabName) {
   if (memoryPaneEl) memoryPaneEl.classList.toggle('active', tabName === 'memory');
   if (historyPaneEl) historyPaneEl.classList.toggle('active', tabName === 'history');
   if (controlPromptHistoryPaneEl) controlPromptHistoryPaneEl.classList.toggle('active', tabName === 'controlPromptHistory');
-  if (routerHistoryPaneEl) routerHistoryPaneEl.classList.toggle('active', tabName === 'routerHistory');
   if (readerControlHistoryPaneEl) readerControlHistoryPaneEl.classList.toggle('active', tabName === 'readerControlHistory');
 }
 
@@ -1114,7 +1107,19 @@ function appendAnalyzerPrompt(text) {
   setBookDocumentContent('analyze_resault', `${current}${current ? '\n' : ''}${prompt}\n`);
 }
 
-async function runAnalyzerPrompt(promptText, isManualPrompt) {
+function optionalTemperatureValue(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw || ['null', 'none', '~'].includes(raw.toLowerCase())) return null;
+  const number = Number(raw);
+  if (!Number.isFinite(number)) return null;
+  return Math.min(2, Math.max(0, number));
+}
+
+function currentSpeechTemperature() {
+  return optionalTemperatureValue(speechLlmTemperatureEl ? speechLlmTemperatureEl.value : null);
+}
+
+async function runAnalyzerPrompt(promptText, isManualPrompt, options = {}) {
   const prompt = String(promptText !== null ? promptText : (analyzerChatInputEl ? analyzerChatInputEl.value : '')).trim();
   if (!prompt) {
     setBookStatus('Analyzer prompt empty');
@@ -1127,7 +1132,10 @@ async function runAnalyzerPrompt(promptText, isManualPrompt) {
   setBookStatus('Analyzer sending...');
   pushReaderLog(`[Analyzer] send chars=${prompt.length}: ${prompt.slice(0, 120)}`);
   try {
-    const data = await postJsonBody('/reader-llm/send', { text: prompt });
+    const data = await postJsonBody('/reader-llm/send', {
+      text: prompt,
+      temperature: optionalTemperatureValue(options.temperature),
+    });
     if (!data.ok) throw new Error(data.error || 'reader llm failed');
     appendAnalyzerReply(data.text || '');
     await openBookFile('analyze_resault');
@@ -1167,7 +1175,10 @@ async function sendSpeechLlmPrompt() {
   if (speechLlmChatInputEl) speechLlmChatInputEl.value = '';
   if (speechLlmChatSendButtonEl) speechLlmChatSendButtonEl.disabled = true;
   try {
-    const data = await postJsonBody('/speech-llm/send', { text: prompt });
+    const data = await postJsonBody('/speech-llm/send', {
+      text: prompt,
+      temperature: currentSpeechTemperature(),
+    });
     if (!data.ok) throw new Error(data.error || 'speech llm failed');
   } catch (e) {
     setBookStatus(`Speech LLM error: ${e.message || e}`);
@@ -1187,7 +1198,10 @@ async function streamReaderLlmPrompt(promptText, onDelta, options = {}) {
   const res = await fetch('/reader-llm/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: prompt }),
+    body: JSON.stringify({
+      text: prompt,
+      temperature: optionalTemperatureValue(options.temperature),
+    }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -1305,14 +1319,19 @@ function readerEventTalkerText(name, prompt) {
   return [subject, message].filter(Boolean).join(' ').trim();
 }
 
-async function sendReaderEventAsrTurn(text, label, context = '') {
+async function sendReaderEventAsrTurn(text, label, context = '', temperature = null) {
   const userText = String(text || '').trim();
   if (!userText) return false;
   try {
     const contextText = String(context || '');
-    const data = await postJsonBody('/reader-mode/asr-turn', { text: userText, context: contextText });
+    const data = await postJsonBody('/reader-mode/asr-turn', {
+      text: userText,
+      context: contextText,
+      temperature: optionalTemperatureValue(temperature),
+    });
     if (!data.ok) throw new Error(data.error || 'reader event ASR failed');
-    pushReaderLog(`[Talker] ${label || 'ReaderEvent'} ASR: ${userText.slice(0, 160)}${contextText ? ` context=${contextText.length}` : ''}`);
+    const tempValue = optionalTemperatureValue(temperature);
+    pushReaderLog(`[Talker] ${label || 'ReaderEvent'} ASR: ${userText.slice(0, 160)}${contextText ? ` context=${contextText.length}` : ''}${tempValue !== null ? ` temp=${tempValue}` : ''}`);
     return true;
   } catch (e) {
     pushReaderLog(`[Error] ${label || 'ReaderEvent'} ASR: ${e.message || e}`);
@@ -1376,9 +1395,13 @@ async function analyzeBookSection(startFrom) {
   const startLine = countTextLines(oldResult) + (oldResult ? 2 : 1);
   setBookDocumentContent('analyze_resault', prefix);
   await openBookFile('analyze_resault');
-  const replyText = await streamReaderLlmPrompt(prompt, (_delta, currentText) => {
-    setBookDocumentContent('analyze_resault', `${prefix}${currentText}`);
-  });
+  const replyText = await streamReaderLlmPrompt(
+    prompt,
+    (_delta, currentText) => {
+      setBookDocumentContent('analyze_resault', `${prefix}${currentText}`);
+    },
+    { temperature: config.AnalyzeTemperature },
+  );
   if (!replyText) throw new Error('empty analyze reply');
   const outputText = replyText.trim();
   const inputChars = prompt.length;
@@ -1428,7 +1451,7 @@ async function analyzeBookBatch() {
     const cptShortRest = Math.max(0, Number(batchConfig.CptShortRest || 0) || 0);
     const startText = readerEventTalkerText(bookWorkspaceName, batchConfig.StartReadingPrompt);
     if (startText) {
-      await sendReaderEventAsrTurn(startText, 'StartReading');
+      await sendReaderEventAsrTurn(startText, 'StartReading', '', batchConfig.StartReadingTemperature);
       assertAnalyzeCurrent('workspace changed');
     }
     while (true) {
@@ -1443,7 +1466,7 @@ async function analyzeBookBatch() {
         setBookDocumentContent('now_chapter', result.summary || '');
         await syncReaderContextNow();
         assertAnalyzeCurrent('workspace changed');
-        await sendReaderEventAsrTurn(onReadingText, 'onReading', result.summary || '');
+        await sendReaderEventAsrTurn(onReadingText, 'onReading', result.summary || '', batchConfig.onReadingTemperature);
         assertAnalyzeCurrent('workspace changed');
         setBookDocumentContent('now_chapter', '');
         await syncReaderContextNow();
@@ -1461,7 +1484,7 @@ async function analyzeBookBatch() {
           pushReaderLog('[Analyze] FinishReading delay 2000ms after last playback');
           await sleepMs(2000);
           assertAnalyzeCurrent('workspace changed');
-          await sendReaderEventAsrTurn(finishText, 'FinishReading');
+          await sendReaderEventAsrTurn(finishText, 'FinishReading', '', batchConfig.FinishReadingTemperature);
           assertAnalyzeCurrent('workspace changed');
         }
         break;
@@ -2094,7 +2117,8 @@ async function uploadBookFile(fileList) {
     const uploadedSidecars = data.uploaded_sidecars ? Object.values(data.uploaded_sidecars).join(',') : '';
     pushReaderLog(`[Upload] epub=${bookWorkspaceName} xhtml=${xhtmlIndexItems.length}${uploadedSidecars ? ` sidecars=${uploadedSidecars}` : ''}${loadedSuffix}`);
     if (data.on_loading_talker_text) {
-      pushReaderLog(`[Talker] onLoading ASR: ${String(data.on_loading_talker_text).slice(0, 160)}`);
+      const onLoadingTemp = optionalTemperatureValue(data.on_loading_temperature);
+      pushReaderLog(`[Talker] onLoading ASR: ${String(data.on_loading_talker_text).slice(0, 160)}${onLoadingTemp !== null ? ` temp=${onLoadingTemp}` : ''}`);
     }
     if (data.on_loading_prompt && !data.loaded_analyze_resault) {
       await appendAnalyzerOnLoadingPrompt(data.on_loading_prompt);
@@ -2346,6 +2370,7 @@ async function saveControlPromptNow() {
   try {
     const data = await postJsonBody('/control-prompt', {
       inject_threshold: Number(controlPromptInjectThresholdEl ? controlPromptInjectThresholdEl.value : 0),
+      llm_temperature: optionalTemperatureValue(speechLlmTemperatureEl ? speechLlmTemperatureEl.value : null),
       raw_history_rounds: Number(rawHistoryRoundsEl ? rawHistoryRoundsEl.value : 0),
       raw_recent_rounds: Number(rawRecentRoundsEl ? rawRecentRoundsEl.value : 0),
       memory_extract_freq: Number(memoryExtractFreqEl ? memoryExtractFreqEl.value : 0),
@@ -2372,7 +2397,7 @@ if (controlPromptInjectThresholdEl) {
   controlPromptInjectThresholdEl.addEventListener('input', scheduleControlPromptSave);
   controlPromptInjectThresholdEl.addEventListener('change', saveControlPromptNow);
 }
-for (const input of [rawHistoryRoundsEl, rawRecentRoundsEl, memoryExtractFreqEl, memoryExtractRoundsEl]) {
+for (const input of [speechLlmTemperatureEl, rawHistoryRoundsEl, rawRecentRoundsEl, memoryExtractFreqEl, memoryExtractRoundsEl]) {
   if (!input) continue;
   input.addEventListener('input', scheduleControlPromptSave);
   input.addEventListener('change', saveControlPromptNow);
@@ -2403,6 +2428,9 @@ function updateControlPromptTokenDisplay(data) {
   }
   if (rawHistoryRoundsEl && document.activeElement !== rawHistoryRoundsEl) {
     rawHistoryRoundsEl.value = String(data.raw_history_rounds ?? rawHistoryRoundsEl.value);
+  }
+  if (speechLlmTemperatureEl && document.activeElement !== speechLlmTemperatureEl) {
+    speechLlmTemperatureEl.value = String(data.llm_temperature ?? speechLlmTemperatureEl.value);
   }
   if (rawRecentRoundsEl && document.activeElement !== rawRecentRoundsEl) {
     rawRecentRoundsEl.value = String(data.raw_recent_rounds ?? rawRecentRoundsEl.value);
@@ -2474,6 +2502,7 @@ async function pollState() {
     const counterLines = [
       browserAecLine(data),
       browserAudioConstraintLine(),
+      `llm temp: ${Number(data.last_llm_temperature ?? data.llm_temperature ?? 0).toFixed(2)}`,
       `interupt_count: ${data.interupt_count ?? 0} | tts_playing=${data.tts_playing ? 'yes' : 'no'} | speech: active=${data.speech_turn_active ? 'yes' : 'no'} queue=${data.speech_turn_queue_size ?? 0} | mode=${data.interupt_mode ? 'yes' : 'no'} | asr: inflight=${data.asr_inflight ? 'yes' : 'no'} | queue=${data.asr_queue_size ?? 0} | last=${data.last_asr_duration_ms ?? 0}ms`,
       `interupt_volume: ${Number(data.interupt_last_volume || 0).toFixed(4)}  voice_gate: ${Number(data.active_voice_start_volume || 0).toFixed(4)} | early=${data.tts_early_release_active ? 'yes' : 'no'} | switch_left=${Number(data.interupt_switch_remaining || 0).toFixed(2)}s`,
       `interrupt_langs: ${(data.interrupt_languages || []).join(', ') || 'all'}`,
@@ -2510,13 +2539,6 @@ async function pollState() {
     if (controlPromptHistoryKey !== lastControlPromptHistoryKey) {
       lastControlPromptHistoryKey = controlPromptHistoryKey;
       renderHistory(controlPromptHistoryOutEl, controlPromptHistoryView);
-    }
-
-    const routerHistoryView = data.router_history || [];
-    const routerHistoryKey = JSON.stringify(routerHistoryView);
-    if (routerHistoryKey !== lastRouterHistoryKey) {
-      lastRouterHistoryKey = routerHistoryKey;
-      renderHistory(routerHistoryOutEl, routerHistoryView);
     }
 
     const readerControlHistoryView = data.reader_control_history || [];
@@ -2569,6 +2591,8 @@ if (startBtn) {
 if (memResetBtn) {
   memResetBtn.onclick = async () => {
     memResetBtn.disabled = true;
+    readerAnalyzeGeneration += 1;
+    if (readerAutoAnalyzeAllEl) readerAutoAnalyzeAllEl.checked = false;
     try {
       const data = await postJson('/mem-reset');
       if (!data.ok) throw new Error(data.error || 'mem reset failed');
@@ -2577,7 +2601,6 @@ if (memResetBtn) {
       lastReplyKey = '';
       lastHistoryKey = '';
       lastControlPromptHistoryKey = '';
-      lastRouterHistoryKey = '';
       lastReaderControlHistoryKey = '';
       lastTtsKey = '';
       lastErrorKey = '';
@@ -2587,7 +2610,6 @@ if (memResetBtn) {
       renderHistory(memoryOutEl, []);
       renderHistory(historyOutEl, []);
       renderHistory(controlPromptHistoryOutEl, []);
-      renderHistory(routerHistoryOutEl, []);
       renderHistory(readerControlHistoryOutEl, []);
       renderLines(ttsLogEl, [], '');
       renderLines(logEl, [], 'err');

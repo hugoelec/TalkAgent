@@ -54,7 +54,10 @@ class InterruptJudge:
             "Answer only interrupt or continue."
         )
         try:
-            reply = "".join(engine.llm_client.stream_reply(judge_prompt, history=[])).strip()
+            with engine.lock:
+                engine.last_llm_temperature = 0.0
+                engine._push_log_locked(f"[LLM] send source=InterruptAnalyze mode=control temp=0 chars={len(judge_prompt)}")
+            reply = "".join(engine.llm_client.stream_reply(judge_prompt, history=[], temperature=0.0)).strip()
         except Exception as exc:
             self.record_result(asr_text, "continue", f"error={exc!r} lang={lang or '-'}")
             return "continue"

@@ -1,4 +1,4 @@
-﻿# QasrListenerV4 config
+# QasrListenerV4 config
 # This file configures ASR, LLM, OmniVoice TTS, Web UI, audio slicing, and turn detection.
 
 # ASR service settings.
@@ -33,7 +33,7 @@ tts:
   endpoint: "/tts_file"               # OmniVoice TTS endpoint.
   voice: "cheer/norm"                 # Voice or sample name.
   language: "auto"                    # TTS language; auto lets OmniVoice detect it.
-  instruct: ""                        # Optional OmniVoice instruction text.
+  instruct: "Chinese Accent"          # Optional OmniVoice instruction text.
   speed: 1                            # Speech speed.
   duration: 0                         # Target duration; 0 means unspecified.
   num_step: 25                        # Inference steps.

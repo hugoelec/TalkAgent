@@ -469,6 +469,26 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
                         return raw_value.strip("\"' ")
         return ""
 
+    def reader_event_temperature(event_name: str) -> float | None:
+        loaded = reader_config_dict()
+        event_config = loaded.get(event_name)
+        value = None
+        if isinstance(event_config, dict):
+            value = event_config.get("temperature", event_config.get("Temperature"))
+        if value is None:
+            source = reader_config_source()
+            in_event = False
+            for line in source.splitlines():
+                if re.match(r"^\S", line):
+                    in_event = line.strip() == f"{event_name}:"
+                    continue
+                if in_event:
+                    match = re.match(r"^\s+temperature\s*:\s*(.+?)\s*$", line, flags=re.IGNORECASE)
+                    if match:
+                        value = match.group(1).strip().strip("\"'")
+                        break
+        return parse_optional_temperature(value)
+
     def reader_on_loading_prompt() -> str:
         return reader_event_prompt("onLoading")
 
@@ -483,6 +503,23 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
         loaded = reader_config_dict()
         analyze = loaded.get("Analyze")
         return analyze if isinstance(analyze, dict) else {}
+
+    def reader_analyze_temperature() -> float | None:
+        analyze = reader_analyze_config()
+        value = analyze.get("temperature", analyze.get("Temperature"))
+        if value is None:
+            source = reader_config_source()
+            in_analyze = False
+            for line in source.splitlines():
+                if re.match(r"^\S", line):
+                    in_analyze = line.strip() == "Analyze:"
+                    continue
+                if in_analyze:
+                    match = re.match(r"^\s+temperature\s*:\s*(.+?)\s*$", line, flags=re.IGNORECASE)
+                    if match:
+                        value = match.group(1).strip().strip("\"'")
+                        break
+        return parse_optional_temperature(value)
 
     def reader_analyze_int_value(key: str, default: int = 0) -> int:
         analyze = reader_analyze_config()
@@ -529,8 +566,12 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             return False
         return bool(default)
 
-    def reader_llm_turn(user_text: str) -> str:
-        return "".join(reader_llm_client.stream_reply(user_text, history=[])).strip()
+    def reader_llm_turn(user_text: str, temperature: float | None = None) -> str:
+        resolved_temperature = reader_llm_client.resolve_temperature(temperature)
+        with engine.lock:
+            engine.last_llm_temperature = resolved_temperature
+        engine._push_log(f"[LLM] send source=ReaderAnalyzer mode=reader_analyzer temp={resolved_temperature:g} chars={len(user_text)}")
+        return "".join(reader_llm_client.stream_reply(user_text, history=[], temperature=temperature)).strip()
 
     def current_tts_settings() -> Dict[str, Any]:
         with tts_settings_lock:
@@ -550,6 +591,19 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
     def clamp_float(value: Any, minimum: float, maximum: float) -> float:
         parsed = float(value)
         return max(minimum, min(maximum, parsed))
+
+    def parse_optional_temperature(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"", "null", "none", "~"}:
+                return None
+            value = normalized
+        try:
+            return clamp_float(value, 0.0, 2.0)
+        except (TypeError, ValueError):
+            return None
 
     def clamp_int(value: Any, minimum: int, maximum: int) -> int:
         parsed = int(value)
@@ -590,6 +644,7 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             control_prompt=str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
             persona_prompt=str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
             tool_prompt=str(getattr(args, "llm_tool_prompt", "")),
+            llm_temperature=float(args.llm_temperature),
             control_prompt_inject_threshold=int(engine.control_prompt_inject_threshold),
             raw_history_rounds=int(getattr(args, "raw_history_rounds", 10)),
             raw_recent_rounds=int(getattr(args, "raw_recent_rounds", 3)),
@@ -643,6 +698,7 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
                 "control_prompt": str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
                 "persona_prompt": str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
                 "tool_prompt": str(getattr(args, "llm_tool_prompt", "")),
+                "llm_temperature": float(args.llm_temperature),
                 "current_tokens": int(engine.memory.control_prompt_current_tokens),
                 "token_since_inject": int(engine.memory.control_prompt_token_since_inject),
                 "delta_tokens": int(engine.memory.control_prompt_delta_tokens),
@@ -664,7 +720,12 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
         raw_recent_rounds = payload.get("raw_recent_rounds", None)
         memory_extract_freq = payload.get("memory_extract_freq", None)
         memory_extract_rounds = payload.get("memory_extract_rounds", None)
+        llm_temperature = payload.get("llm_temperature", None)
         with engine.llm_control_prompt_lock:
+            if llm_temperature is not None:
+                parsed_temperature = parse_optional_temperature(llm_temperature)
+                if parsed_temperature is not None:
+                    args.llm_temperature = parsed_temperature
             if inject_threshold is not None:
                 engine.control_prompt_inject_threshold = max(0, int(inject_threshold))
                 args.llm_control_prompt_inject_threshold = engine.control_prompt_inject_threshold
@@ -686,6 +747,7 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
                 control_prompt=str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
                 persona_prompt=str(getattr(args, "llm_persona_prompt", args.llm_control_prompt)),
                 tool_prompt=str(getattr(args, "llm_tool_prompt", "")),
+                llm_temperature=float(args.llm_temperature),
                 current_tokens=int(engine.memory.control_prompt_current_tokens),
                 token_since_inject=int(engine.memory.control_prompt_token_since_inject),
                 delta_tokens=int(engine.memory.control_prompt_delta_tokens),
@@ -801,6 +863,7 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
         )
         if epub_upload is None or not epub_upload.filename:
             return jsonify(ok=False, error="one .epub file is required"), 400
+        dropped_upload_turns = engine.cancel_speech_turns("reader upload")
         raw_uploaded_filename = str(epub_upload.filename)
         filename = Path(raw_uploaded_filename).name
         stem = safe_file_stem(filename)
@@ -828,11 +891,17 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             engine.reader_analyze_resault = analyze_content
             engine.reader_summary_index = summary_content
         on_loading_prompt = reader_on_loading_prompt()
+        on_loading_temperature = reader_event_temperature("onLoading")
         on_loading_talker_text = ""
         if on_loading_prompt:
             on_loading_talker_text = reader_on_loading_talker_text(filename, on_loading_prompt)
             try:
-                engine.start_asr_text_turn(on_loading_talker_text, source="ReaderOnLoadingASR")
+                engine.start_asr_text_turn(
+                    on_loading_talker_text,
+                    source="ReaderOnLoadingASR",
+                    llm_temperature=on_loading_temperature,
+                    require_reader_mode=True,
+                )
             except Exception:
                 logging.exception("failed to start reader onLoading talker turn")
         xhtml_index = [
@@ -857,7 +926,9 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             uploaded_sidecars=sidecar_names,
             loaded_analyze_resault=loaded_analyze_resault,
             loaded_summary_index=loaded_summary_index,
+            dropped_speech_turns=dropped_upload_turns,
             on_loading_prompt=on_loading_prompt,
+            on_loading_temperature=on_loading_temperature,
             on_loading_talker_text=on_loading_talker_text,
             xhtml_index=xhtml_index,
             files=[
@@ -968,10 +1039,11 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
     def send_reader_llm() -> Response:
         payload = request.get_json(silent=True) or {}
         user_text = str(payload.get("text", "")).strip()
+        temperature = parse_optional_temperature(payload.get("temperature", None))
         if not user_text:
             return jsonify(ok=False, error="empty text"), 400
         try:
-            response_text = reader_llm_turn(user_text)
+            response_text = reader_llm_turn(user_text, temperature=temperature)
             return jsonify(ok=True, text=response_text)
         except Exception as exc:
             return jsonify(ok=False, error=repr(exc)), 500
@@ -980,12 +1052,19 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
     def stream_reader_llm() -> Response:
         payload = request.get_json(silent=True) or {}
         user_text = str(payload.get("text", "")).strip()
+        temperature = parse_optional_temperature(payload.get("temperature", None))
         if not user_text:
             return jsonify(ok=False, error="empty text"), 400
 
         def generate():
             try:
-                for delta in reader_llm_client.stream_reply(user_text, history=[]):
+                resolved_temperature = reader_llm_client.resolve_temperature(temperature)
+                with engine.lock:
+                    engine.last_llm_temperature = resolved_temperature
+                engine._push_log(
+                    f"[LLM] send source=ReaderAnalyzerStream mode=reader_analyzer temp={resolved_temperature:g} chars={len(user_text)}"
+                )
+                for delta in reader_llm_client.stream_reply(user_text, history=[], temperature=temperature):
                     if not delta:
                         continue
                     yield delta
@@ -998,10 +1077,11 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
     def send_speech_llm() -> Response:
         payload = request.get_json(silent=True) or {}
         user_text = str(payload.get("text", "")).strip()
+        temperature = parse_optional_temperature(payload.get("temperature", None))
         if not user_text:
             return jsonify(ok=False, error="empty text"), 400
         try:
-            engine.start_manual_llm_turn(user_text)
+            engine.start_manual_llm_turn(user_text, llm_temperature=temperature)
             return jsonify(ok=True)
         except Exception as exc:
             return jsonify(ok=False, error=repr(exc)), 500
@@ -1011,15 +1091,25 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
         payload = request.get_json(silent=True) or {}
         user_text = str(payload.get("text", "")).strip()
         context = str(payload.get("context", "") or "")
+        temperature = parse_optional_temperature(payload.get("temperature", None))
         if not user_text:
             return jsonify(ok=False, error="empty text"), 400
+        with engine.lock:
+            if not engine.reader_mode:
+                return jsonify(ok=False, error="reader mode is not active"), 409
         try:
             engine.start_asr_text_turn(
                 user_text,
                 source="ReaderEventASR",
                 reader_context_override=context,
+                llm_temperature=temperature,
+                require_reader_mode=True,
             )
             return jsonify(ok=True, context_chars=len(context))
+        except ValueError as exc:
+            if "reader mode is not active" in str(exc):
+                return jsonify(ok=False, error=str(exc)), 409
+            return jsonify(ok=False, error=repr(exc)), 400
         except Exception as exc:
             return jsonify(ok=False, error=repr(exc)), 500
 
@@ -1029,14 +1119,18 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
         return {
             "ok": True,
             "AnalyzePrompt": str(analyze.get("AnalyzePrompt", "") or ""),
+            "AnalyzeTemperature": reader_analyze_temperature(),
             "AnalyzeAll": reader_analyze_bool_value("AnalyzeAll", False),
             "AutoAnalyze": reader_analyze_bool_value("AutoAnalyze", False),
             "ResaultPromptOn": reader_analyze_bool_value("ResaultPromptOn", False),
             "ResaultPrompt": str(analyze.get("ResaultPrompt", "") or ""),
             "CptShortRest": reader_analyze_int_value("CptShortRest", 0),
             "StartReadingPrompt": reader_event_prompt("StartReading"),
+            "StartReadingTemperature": reader_event_temperature("StartReading"),
             "onReadingPrompt": reader_event_prompt("onReading"),
+            "onReadingTemperature": reader_event_temperature("onReading"),
             "FinishReadingPrompt": reader_event_prompt("FinishReading"),
+            "FinishReadingTemperature": reader_event_temperature("FinishReading"),
         }
 
     @app.get("/book-reader/file/<file_id>")
@@ -1091,6 +1185,7 @@ def create_app(args: argparse.Namespace, engine: MicEngine) -> Flask:
             "llm_base_url": args.llm_base_url,
             "llm_endpoint": args.llm_endpoint,
             "llm_model": args.llm_model,
+            "llm_temperature": float(args.llm_temperature),
             "llm_stream": args.llm_stream,
             "llm_control_prompt": args.llm_control_prompt,
             "llm_persona_prompt": getattr(args, "llm_persona_prompt", args.llm_control_prompt),

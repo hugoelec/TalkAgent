@@ -111,6 +111,7 @@ class MicEngine:
         self.reader_summary_index = ""
         self.reader_now_chapter = ""
         self.talker_prompt_mode = "normal"
+        self.last_llm_temperature = float(getattr(self.args, "llm_temperature", 0.0))
         self.errors: List[str] = []
         self.llm_control_prompt_lock = threading.Lock()
         self.control_prompt_inject_threshold = max(0, int(getattr(self.args, "llm_control_prompt_inject_threshold", 1000000)))
@@ -250,6 +251,8 @@ class MicEngine:
                 "reader_summary_index_chars": len(self.reader_summary_index or ""),
                 "reader_now_chapter_chars": len(self.reader_now_chapter or ""),
                 "talker_prompt_mode": self.talker_prompt_mode,
+                "llm_temperature": float(self.args.llm_temperature),
+                "last_llm_temperature": float(self.last_llm_temperature),
                 "raw_history_rounds": self.raw_history_rounds,
                 "raw_recent_rounds": self.raw_recent_rounds,
                 "tts_logs": list(self.tts_logs),
@@ -547,6 +550,7 @@ class MicEngine:
                 "reply_index": reply_index,
                 "source": source,
                 "kwargs": kwargs,
+                "reset_generation": self.memory.reset_generation,
             }
         )
 
@@ -590,10 +594,17 @@ class MicEngine:
             user_text = str(turn.get("user_text", "") or "")
             reply_index = int(turn.get("reply_index", -1))
             source = str(turn.get("source", "SpeechTurn") or "SpeechTurn")
+            turn_generation = turn.get("reset_generation")
             kwargs = turn.get("kwargs")
             if not isinstance(kwargs, dict):
                 kwargs = {}
             with self.lock:
+                if not self.memory.is_current_generation(turn_generation if isinstance(turn_generation, int) else None):
+                    if 0 <= reply_index < len(self.reply_results):
+                        if not str(self.reply_results[reply_index].get("text", "") or "").strip():
+                            self.reply_results[reply_index]["text"] = "[Skipped by memory reset]"
+                    self._push_log_locked(f"[{source}] skipped stale LLM turn generation={turn_generation}->{self.memory.reset_generation}")
+                    continue
                 self.speech_turn_active = True
                 self._push_log_locked(
                     f"[{source}] dequeue LLM turn chars={len(user_text)} "
@@ -749,7 +760,7 @@ class MicEngine:
                 f"queued={self.speech_turn_queue.qsize()}"
             )
 
-    def start_manual_llm_turn(self, prompt: str) -> None:
+    def start_manual_llm_turn(self, prompt: str, llm_temperature: float | None = None) -> None:
         user_text = str(prompt or "").strip()
         if not user_text:
             raise ValueError("empty prompt")
@@ -762,16 +773,25 @@ class MicEngine:
         threading.Thread(
             target=self._llm_stream_reply,
             args=(user_text, reply_index),
-            kwargs={"enable_tts": False},
+            kwargs={"enable_tts": False, "llm_temperature": llm_temperature},
             name="llm-manual-stream",
             daemon=True,
         ).start()
 
-    def start_asr_text_turn(self, text: str, source: str = "ASR", reader_context_override: str = "") -> None:
+    def start_asr_text_turn(
+        self,
+        text: str,
+        source: str = "ASR",
+        reader_context_override: str = "",
+        llm_temperature: float | None = None,
+        require_reader_mode: bool = False,
+    ) -> None:
         user_text = str(text or "").strip()
         if not user_text:
             raise ValueError("empty ASR text")
         with self.lock:
+            if require_reader_mode and not self.reader_mode:
+                raise ValueError("reader mode is not active")
             self._push_log_locked(f"[{source}] queue LLM turn chars={len(user_text)}")
             self.reply_results.append({"role": "user", "text": user_text})
             self.reply_results.append({"role": "assistant", "text": ""})
@@ -791,6 +811,7 @@ class MicEngine:
                 source,
                 reader_context_override=str(reader_context_override or ""),
                 reader_context_override_source=source,
+                llm_temperature=llm_temperature,
             )
             self._push_log_locked(
                 f"[{source}] queued LLM turn chars={len(user_text)} "
@@ -823,6 +844,7 @@ class MicEngine:
         enable_router: bool = True,
         reader_context_override: str = "",
         reader_context_override_source: str = "",
+        llm_temperature: float | None = None,
     ) -> None:
         response_parts: List[str] = []
         tts_queue: "queue.Queue[str | None]" = queue.Queue(maxsize=max(1, int(self.args.tts_queue_ahead)))
@@ -859,10 +881,16 @@ class MicEngine:
                 )
             llm_user_text = prompt_result.prompt
             history = prompt_result.history
+            resolved_temperature = self.llm_client.resolve_temperature(llm_temperature)
             with self.lock:
                 self.talker_prompt_mode = prompt_result.mode
+                self.last_llm_temperature = resolved_temperature
+                self._push_log_locked(
+                    f"[LLM] send source={reader_context_override_source or self.talker_prompt_mode} "
+                    f"mode={self.talker_prompt_mode} temp={resolved_temperature:g} chars={len(llm_user_text)}"
+                )
                 self.memory.add_control_prompt_tokens(estimate_token_count(llm_user_text))
-            for delta in self.llm_client.stream_reply(llm_user_text, history=history):
+            for delta in self.llm_client.stream_reply(llm_user_text, history=history, temperature=llm_temperature):
                 if cancel_event.is_set():
                     break
                 if not delta:
@@ -999,7 +1027,10 @@ class MicEngine:
         reply = ""
         codes: list[str] = []
         try:
-            reply = "".join(self.llm_client.stream_reply(router_user_text, history=[])).strip()
+            with self.lock:
+                self.last_llm_temperature = 0.0
+                self._push_log_locked(f"[LLM] send source=Router mode=control temp=0 chars={len(router_user_text)}")
+            reply = "".join(self.llm_client.stream_reply(router_user_text, history=[], temperature=0.0)).strip()
         except Exception as exc:
             with self.lock:
                 if not self.memory.is_current_generation(reset_generation):

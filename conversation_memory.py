@@ -176,6 +176,7 @@ class ConversationMemory:
                 engine.current_llm_cancel_event.set()
             if engine.tts_cancel_event is not None:
                 engine.tts_cancel_event.set()
+            engine._drain_pending_speech_turns("[Skipped by memory reset]")
             engine.transcript = []
             engine.silence_counters = []
             engine.reply_results = []
